@@ -1,0 +1,23 @@
+project_id = "stravakinda"
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+[db]
+port = 54322
+major_version = 17
+[auth]
+enabled = true
+site_url = "stravakinda://auth/callback"
+additional_redirect_urls = ["stravakinda://auth/callback", "http://localhost:8081/auth/callback", "http://127.0.0.1:8081/auth/callback", "http://localhost:4173/auth/callback", "http://127.0.0.1:4173/auth/callback"]
+[auth.email]
+enable_signup = true
+enable_confirmations = true
+[functions.ai-coach]
+verify_jwt = false
+[functions.delete-account]
+verify_jwt = false
+[functions.deliver-notifications]
+# Validates a separate server-only PUSH_WORKER_SECRET. Never callable by ordinary clients.
+verify_jwt = false

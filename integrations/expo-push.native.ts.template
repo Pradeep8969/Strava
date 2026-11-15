@@ -1,0 +1,38 @@
+import * as Notifications from 'expo-notifications';
+import * as Device from 'expo-device';
+import * as SecureStore from 'expo-secure-store';
+import {randomUUID} from 'expo-crypto';
+import Constants from 'expo-constants';
+import {Platform} from 'react-native';
+import type {PushAdapter} from './push-platform';
+const seen=new Set<string>();
+export const pushAdapter:PushAdapter={
+ async permission(ask){
+  if(!Device.isDevice)throw new Error('Remote push requires a physical device.');
+  if(Platform.OS==='android')await Notifications.setNotificationChannelAsync('account-updates',{name:'Account updates',importance:Notifications.AndroidImportance.DEFAULT});
+  let status=await Notifications.getPermissionsAsync();
+  if(!status.granted && ask && status.canAskAgain)status=await Notifications.requestPermissionsAsync();
+  return status.granted || status.ios?.status===Notifications.IosAuthorizationStatus.PROVISIONAL;
+ },
+ async token(){
+  const projectId=Constants.expoConfig?.extra?.eas?.projectId??Constants.easConfig?.projectId;
+  if(!projectId)throw new Error('Configure your real Expo project ID before enabling push.');
+  const result=await Notifications.getExpoPushTokenAsync({projectId});
+  return {token:result.data,platform:Platform.OS==='ios'?'ios':'android'};
+ },
+ async installation(){let id=await SecureStore.getItemAsync('push-installation');if(!id){id=randomUUID();await SecureStore.setItemAsync('push-installation',id);}return id;},
+ async consent(owner,value){const key=`push-consent.${owner}`;if(value!==undefined)await SecureStore.setItemAsync(key,value?'yes':'no');return await SecureStore.getItemAsync(key)==='yes';},
+ listen(owner,onTap,onReceive){
+  Notifications.setNotificationHandler({handleNotification:async notification=>{const own=notification.request.content.data.user_id===owner;return {shouldShowBanner:own,shouldShowList:own,shouldPlaySound:false,shouldSetBadge:false};}});
+  const tap=(result:Notifications.NotificationResponse)=>{
+   const data=result.notification.request.content.data;
+   if(result.actionIdentifier!==Notifications.DEFAULT_ACTION_IDENTIFIER || data.user_id!==owner || data.screen!=='notifications' || typeof data.notification_id!=='string')return;
+   const id=result.notification.request.identifier;if(seen.has(id))return;seen.add(id);if(seen.size>100)seen.delete(seen.values().next().value!);
+   onTap();void Notifications.clearLastNotificationResponseAsync();
+  };
+  const response=Notifications.addNotificationResponseReceivedListener(tap);
+  const received=Notifications.addNotificationReceivedListener(n=>{if(n.request.content.data.user_id===owner)onReceive();});
+  void Notifications.getLastNotificationResponseAsync().then(last=>{if(last)tap(last);}).catch(()=>undefined);
+  return()=>{response.remove();received.remove();Notifications.setNotificationHandler({handleNotification:async()=>({shouldShowBanner:false,shouldShowList:false,shouldPlaySound:false,shouldSetBadge:false})});};
+ }
+};
