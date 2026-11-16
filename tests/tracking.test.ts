@@ -76,6 +76,12 @@ describe("GPS geometry and quality", () => {
         .rejected,
     ).toBe(1);
   });
+  it("rejects fixes captured before resume and timestamps in the future", () => {
+    const w = resume(pause(workout(), 5000), 10000);
+    expect(addPoint(w, point(0, 9000)).rejected).toBe(1);
+    expect(addPoint(w, point(0, Date.now() + 60000)).rejected).toBe(1);
+    expect(w.points).toHaveLength(0);
+  });
 });
 describe("workout state and statistics", () => {
   it("freezes paused time and ignores duplicate pause/resume", () => {

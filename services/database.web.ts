@@ -83,6 +83,59 @@ export async function getValue<T>(key: string): Promise<T | null> {
 export async function setValue(key: string, value: unknown) {
   await transaction("kv", "readwrite", (s) => s.put(value, key));
 }
+/** The callback MUST be synchronous: get and put run in one live IDB transaction.
+ * Overlapping readwrite transactions on kv serialize across tabs/connections. */
+export async function updateValue<T>(
+  key: string,
+  update: (value: T | null) => T,
+): Promise<T> {
+  const db = await database();
+  return new Promise<T>((resolve, reject) => {
+    const unavailable = () =>
+      new Error(
+        "Atomic route storage failed. The route was not saved. Check storage permissions and space, then retry.",
+      );
+    let tx: IDBTransaction;
+    try {
+      tx = db.transaction("kv", "readwrite");
+    } catch {
+      reject(unavailable());
+      return;
+    }
+    let next: T, failure: unknown;
+    tx.oncomplete = () => resolve(next);
+    tx.onabort = () => reject(failure ?? unavailable());
+    tx.onerror = () => {
+      /* The transaction abort handler reports failure, never success. */
+    };
+    try {
+      const store = tx.objectStore("kv"),
+        request = store.get(key);
+      request.onsuccess = () => {
+        try {
+          next = update(request.result ?? null);
+          if (next && typeof (next as { then?: unknown }).then === "function")
+            throw new Error(
+              "Atomic storage updates must be synchronous. The route was not saved.",
+            );
+        } catch (error) {
+          failure = error;
+          tx.abort();
+          return;
+        }
+        try {
+          store.put(next, key);
+        } catch {
+          failure = unavailable();
+          tx.abort();
+        }
+      };
+    } catch {
+      failure = unavailable();
+      tx.abort();
+    }
+  });
+}
 export async function pendingDeletionIds(): Promise<string[]> {
   const keys = await transaction<IDBValidKey[]>("kv", "readonly", (s) =>
     s.getAllKeys(),

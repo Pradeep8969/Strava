@@ -70,9 +70,11 @@ supabase/.temp/
 supabase/.branches/
 
 # Private local GPS recordings
+private-route-backups/
 private-recordings/
 local-activities/
 gps-recordings/
+private-route-backups/
 
 # Additional credentials
 *.pfx
@@ -81,6 +83,16 @@ gps-recordings/
 .claude/
 
 # Generated development artifacts
+artifacts/
+# Downloaded route exports and recovery material (keep local)
+*route-backup*.json
+*route-export*.json
+*recovery-archive*
+*.sql.gz
+*.db-wal
+*.db-shm
+*.sqlite-wal
+*.sqlite-shm
 artifacts/bottom-navigation/native/
 artifacts/*.log
 

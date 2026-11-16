@@ -1,63 +1,55 @@
-import { ImageBackground, Text, View } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
-import { useColors } from "./ui";
+import { memo, useMemo } from "react";
 import type { TrackPoint } from "../types/activity";
-export default function TrackMap({
+import type { MapRoute } from "../features/discovery/map-data";
+import { validCoordinate } from "../features/discovery/map-data";
+import DiscoveryMap from "./DiscoveryMap";
+import { Copy, useColors } from "./ui";
+import { View, useWindowDimensions } from "react-native";
+
+export default memo(function TrackMap({
   points,
+  current = false,
 }: {
   points: TrackPoint[];
   onPress?: unknown;
   current?: boolean;
   cursor?: TrackPoint;
 }) {
+  const width = useWindowDimensions().width;
   const c = useColors();
-  return (
-    <ImageBackground
-      source={require("../assets/nepal-trails.png")}
-      imageStyle={{ borderRadius: 22 }}
-      style={{
-        minHeight: 220,
-        borderRadius: 22,
-        overflow: "hidden",
-        backgroundColor: c.navy,
-      }}
-    >
+  const routes = useMemo<MapRoute[]>(
+    () => [
+      {
+        id: "workout-track",
+        title: "Recorded activity route",
+        kind: "recording",
+        points,
+      },
+    ],
+    [points],
+  );
+  // Do not load MapLibre or request tiles for an activity without usable GPS.
+  if (!points.some(validCoordinate))
+    return (
       <View
         style={{
-          flex: 1,
-          backgroundColor: "rgba(13,44,51,0.52)",
-          padding: 22,
-          justifyContent: "space-between",
-          gap: 17,
+          minHeight: 160,
+          padding: 24,
+          justifyContent: "center",
+          borderRadius: 16,
+          backgroundColor: c.greenSoft,
         }}
       >
-        <View
-          style={{
-            flexDirection: "row",
-            gap: 7,
-            alignItems: "center",
-            alignSelf: "flex-start",
-            borderRadius: 50,
-            backgroundColor: "rgba(7,34,42,0.8)",
-            padding: 10,
-          }}
-        >
-          <Ionicons name="map-outline" size={17} color="#fff" />
-          <Text style={{ color: "#fff", fontWeight: "800", fontSize: 11 }}>
-            NATIVE MAP PREVIEW
-          </Text>
-        </View>
-        <View style={{ gap: 6, maxWidth: 560 }}>
-          <Text style={{ color: "#fff", fontWeight: "900", fontSize: 21 }}>
-            Your next route starts outside.
-          </Text>
-          <Text style={{ color: "#E4EFEB", lineHeight: 19, fontSize: 12 }}>
-            {points.length ? `${points.length} GPS fixes stored. ` : ""}
-            Record real foreground GPS using the Record screen and its route
-            map. This panel is a scenic illustration, not an interactive map.
-          </Text>
-        </View>
+        <Copy>No recorded route for this activity.</Copy>
       </View>
-    </ImageBackground>
+    );
+  return (
+    <DiscoveryMap
+      routes={routes}
+      selectedId="workout-track"
+      height={width >= 1100 ? 440 : width >= 768 ? 400 : 320}
+      tracking={current}
+      variant={current ? "record" : "activity"}
+    />
   );
-}
+});

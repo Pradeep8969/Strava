@@ -46,3 +46,14 @@ it("handles missing geometry, zero width and crossing the date line", () => {
   ).toBe(true);
   expect(group[0][0].x).toBeLessThan(group[0][1].x);
 });
+it("does not bridge invalid or masked coordinates and supports slow waypoint planning", () => {
+  const points = [
+    point(27, 85, 0),
+    point(NaN, NaN, 1000),
+    point(27.01, 85.01, 2000),
+  ];
+  expect(routePreview(points, 300, 100)).toEqual([]);
+  const plan = [point(27, 85, 0), point(27.01, 85.01, 120000)];
+  expect(routePreview(plan, 300, 100)).toEqual([]);
+  expect(routePreview(plan, 300, 100, "plan")).toHaveLength(1);
+});

@@ -96,6 +96,40 @@ it("requests location only on Start, saves the real fix, and preserves owner/vis
   expect(stats(row).meters).toBe(0);
   await expect(recorder.startWorkout("walking")).rejects.toThrow("unfinished");
 });
+it("serializes concurrent Start requests and saves a zero-distance workout only once", async () => {
+  const results = await Promise.allSettled([
+    recorder.startWorkout("walking"),
+    recorder.startWorkout("running"),
+  ]);
+  expect(results.map((r) => r.status)).toEqual(["fulfilled", "rejected"]);
+  expect(fake.get).toHaveBeenCalledTimes(1);
+  await recorder.finishWorkout("recording-id");
+  const saved = structuredClone(fake.rows.get("recording-id")!);
+  vi.setSystemTime(150000);
+  await recorder.finishWorkout("recording-id");
+  expect(fake.rows.size).toBe(1);
+  expect(fake.rows.get("recording-id")).toEqual(saved);
+  expect(stats(saved).meters).toBe(0);
+  expect(stats(saved).pace).toBeNull();
+});
+it.each(["pauseWorkout", "finishWorkout"] as const)(
+  "keeps %s retryable when local saving fails",
+  async (operation) => {
+    await recorder.startWorkout("running");
+    fake.writes.mockImplementationOnce(() => {
+      throw new Error("Storage full");
+    });
+    await expect(recorder[operation]("recording-id")).rejects.toThrow(
+      "Storage full",
+    );
+    expect(fake.clear).not.toHaveBeenCalled();
+    expect(fake.rows.get("recording-id")!.state).toBe("recording");
+    await recorder[operation]("recording-id");
+    expect(fake.rows.get("recording-id")!.state).toBe(
+      operation === "pauseWorkout" ? "paused" : "finished",
+    );
+  },
+);
 it.each([
   [1, "permission"],
   [2, "unavailable"],
@@ -113,8 +147,72 @@ it("rejects insecure/unsupported browsers and inaccurate initial GPS", async () 
   await expect(recorder.startWorkout("running")).rejects.toThrow("HTTPS");
   vi.stubGlobal("window", { isSecureContext: true });
   fake.get.mockImplementation((ok) => ok(position(27.7, { accuracy: 200 })));
-  await expect(recorder.startWorkout("running")).rejects.toThrow("accurate");
+  await expect(recorder.startWorkout("running")).rejects.toThrow(
+    "approximately 200 m",
+  );
   expect(fake.rows.size).toBe(0);
+});
+it.each([
+  [120, 0, "approximately 120 m"],
+  [5, -20000, "stale (20 seconds old)"],
+  [5, 5000, "ahead of the device clock"],
+])(
+  "explains accuracy %s and timestamp offset %s without recording, then retries",
+  async (accuracy, offset, expected) => {
+    const { useGpsAcquisition, WaitingForGpsError } =
+      await import("../features/recording/acquisition");
+    fake.get.mockImplementationOnce((ok) =>
+      ok({ ...position(27.7, { accuracy }), timestamp: Date.now() + offset }),
+    );
+    await expect(recorder.startWorkout("running")).rejects.toBeInstanceOf(
+      WaitingForGpsError,
+    );
+    expect(useGpsAcquisition.getState()).toMatchObject({
+      state: "waiting",
+      detail: expect.stringContaining(expected),
+    });
+    expect(fake.rows.size).toBe(0);
+    expect(fake.watch).not.toHaveBeenCalled();
+    await recorder.startWorkout("running");
+    expect(fake.get).toHaveBeenCalledTimes(2);
+    expect(fake.rows.size).toBe(1);
+    expect(useGpsAcquisition.getState().state).toBe("ready");
+  },
+);
+it.each([1, 2, 3])(
+  "retries after browser acquisition error %s without a reload",
+  async (code) => {
+    const { useGpsAcquisition } =
+      await import("../features/recording/acquisition");
+    fake.get.mockImplementationOnce((_ok, error) => error({ code }));
+    await expect(recorder.startWorkout("walking")).rejects.toThrow();
+    expect(useGpsAcquisition.getState().state).toBe("error");
+    expect(fake.rows.size).toBe(0);
+    await recorder.startWorkout("walking");
+    expect(fake.rows.size).toBe(1);
+    expect(useGpsAcquisition.getState().state).toBe("ready");
+  },
+);
+it("publishes an acquiring state before the browser responds and preserves a paused workout on poor resume GPS", async () => {
+  const { useGpsAcquisition } =
+    await import("../features/recording/acquisition");
+  await recorder.startWorkout("running");
+  await recorder.pauseWorkout("recording-id");
+  const paused = structuredClone(fake.rows.get("recording-id"));
+  let respond!: PositionCallback;
+  fake.get.mockImplementationOnce((ok) => {
+    respond = ok;
+  });
+  const pending = recorder.resumeWorkout("recording-id");
+  await vi.waitFor(() =>
+    expect(useGpsAcquisition.getState().state).toBe("acquiring"),
+  );
+  const rejected = expect(pending).rejects.toThrow("approximately 120 m");
+  respond(position(27.7, { accuracy: 120 }));
+  await rejected;
+  expect(fake.rows.get("recording-id")).toEqual(paused);
+  await recorder.resumeWorkout("recording-id");
+  expect(fake.rows.get("recording-id")!.state).toBe("recording");
 });
 it("accepts actual movement, filters stale/jump readings, and never connects paused segments", async () => {
   await recorder.startWorkout("running");

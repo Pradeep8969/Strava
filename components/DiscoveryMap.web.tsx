@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { areaRegions } from "../features/discovery/catalog";
+import { areaPlaces, areaRegions } from "../features/discovery/catalog";
 import {
   mapConfiguration,
   routeFeatures,
@@ -14,6 +14,16 @@ import {
   type MapLibre,
 } from "../features/discovery/maplibre.web";
 import { useColors } from "./ui";
+import {
+  clearMapMarkers,
+  syncMapMarkers,
+  type MarkerCache,
+  type MapMarker,
+} from "../features/discovery/map-markers.web";
+import {
+  mapOnlyLocation,
+  type MapLocation,
+} from "../features/discovery/map-location";
 const emptyRoutes: MapRoute[] = [];
 export default function DiscoveryMap({
   area = "valley",
@@ -24,8 +34,22 @@ export default function DiscoveryMap({
   onSelect,
   onWaypoint,
   fitRequest = 0,
+  tracking = false,
+  variant = tracking ? "record" : onWaypoint ? "planner" : "explore",
+  tone = "default",
 }: DiscoveryMapProps) {
-  const c = useColors();
+  const palette = useColors();
+  const c =
+    tone === "dark"
+      ? {
+          ...palette,
+          panel: "#202D34",
+          text: "#ECF4F7",
+          border: "#3A4A53",
+          greenSoft: "#263A43",
+          muted: "#B2C4CD",
+        }
+      : palette;
   const host = useRef<HTMLDivElement>(null),
     map = useRef<BrowserMap | null>(null),
     library = useRef<MapLibre | null>(null);
@@ -38,6 +62,25 @@ export default function DiscoveryMap({
   const [query, setQuery] = useState(""),
     [results, setResults] = useState<{ name: string; center: number[] }[]>([]),
     [searchStatus, setSearchStatus] = useState("");
+  const [following, setFollowing] = useState(true);
+  const [locating, setLocating] = useState(false);
+  const [optionsOpen, setOptionsOpen] = useState(false);
+  const markers = useRef<MarkerCache>(new Map());
+  const loading = useRef({ pending: true, applied: true, error: false });
+  const loadTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
+  const lastCamera = useRef("");
+  const acceptedPoint = useMemo(
+    () =>
+      tracking
+        ? routes
+            .find((route) => route.kind === "recording")
+            ?.points.filter(validCoordinate)
+            .at(-1)
+        : undefined,
+    [routes, tracking],
+  );
   const key = process.env.EXPO_PUBLIC_MAPTILER_KEY;
   const config =
     typeof window === "undefined"
@@ -63,8 +106,22 @@ export default function DiscoveryMap({
         : routes,
     [points, routes],
   );
-  const latest = useRef({ area, geometry, selectedId, onSelect, onWaypoint });
-  latest.current = { area, geometry, selectedId, onSelect, onWaypoint };
+  const latest = useRef({
+    area,
+    geometry,
+    selectedId,
+    onSelect,
+    onWaypoint,
+    acceptedPoint,
+  });
+  latest.current = {
+    area,
+    geometry,
+    selectedId,
+    onSelect,
+    onWaypoint,
+    acceptedPoint,
+  };
   useEffect(() => {
     const update = () => setOffline(!navigator.onLine);
     update();
@@ -83,9 +140,13 @@ export default function DiscoveryMap({
       return;
     }
     let disposed = false;
+    const markerCache = markers.current;
     let instance: BrowserMap | undefined;
     let observer: ResizeObserver | undefined;
-    const timeout = setTimeout(() => {
+    let frame = 0,
+      resizeFrame = 0;
+    loading.current = { pending: true, applied: true, error: false };
+    loadTimer.current = setTimeout(() => {
       if (!disposed)
         setStatus(
           "Map is taking too long to load. Check your connection and retry.",
@@ -113,9 +174,6 @@ export default function DiscoveryMap({
         instance.addControl(
           new lib.AttributionControl({
             compact: false,
-            customAttribution: key
-              ? '<a href="https://www.maptiler.com/copyright/">&copy; MapTiler</a> <a href="https://www.openstreetmap.org/copyright">&copy; OpenStreetMap contributors</a>'
-              : undefined,
           }),
         );
         instance
@@ -132,37 +190,75 @@ export default function DiscoveryMap({
           if (validCoordinate(coordinate))
             latest.current.onWaypoint?.(coordinate);
         });
-        instance.on("load", () => {
-          clearTimeout(timeout);
-          if (!disposed) {
-            setStatus("");
-            setReady((v) => v + 1);
+        instance.on("movestart", (event) => {
+          if (event.originalEvent) {
+            lastCamera.current = "";
+            setFollowing(false);
           }
         });
-        instance.on("style.load", () => {
-          if (!disposed) {
-            setStatus("");
-            setReady((v) => v + 1);
-          }
-        });
+        const settle = () => {
+          if (frame || disposed || !loading.current.pending) return;
+          frame = requestAnimationFrame(() => {
+            frame = 0;
+            if (
+              disposed ||
+              !loading.current.pending ||
+              !loading.current.applied ||
+              !instance?.isStyleLoaded()
+            )
+              return;
+            loading.current.pending = false;
+            clearTimeout(loadTimer.current);
+            if (!loading.current.error) setStatus("");
+            setReady((value) => value + 1);
+          });
+        };
+        // Style diffs need not emit style.load; source/data/idle also establish readiness.
+        for (const event of [
+          "load",
+          "style.load",
+          "styledata",
+          "sourcedata",
+          "idle",
+        ])
+          instance.on(event, settle);
         instance.on("error", () => {
-          if (!disposed)
-            setStatus(
-              "Map provider unavailable or some tiles failed. Check connection, key and quota, then retry.",
-            );
+          if (disposed) return;
+          clearTimeout(loadTimer.current);
+          loading.current.error = true;
+          setStatus(
+            "Map provider unavailable or some tiles failed. Check connection, key and quota, then retry.",
+          );
         });
-        observer = new ResizeObserver(() => instance?.resize());
+        let lastSize = "";
+        observer = new ResizeObserver((entries) => {
+          const rectangle = entries[0]?.contentRect;
+          const size = `${rectangle?.width}:${rectangle?.height}`;
+          if (size === lastSize || resizeFrame) return;
+          lastSize = size;
+          resizeFrame = requestAnimationFrame(() => {
+            resizeFrame = 0;
+            if (!disposed) instance?.resize();
+          });
+        });
         observer.observe(host.current);
       })
       .catch(() => {
-        clearTimeout(timeout);
+        clearTimeout(loadTimer.current);
         if (!disposed)
           setStatus("Unable to load the map. Check your connection and retry.");
       });
     return () => {
       disposed = true;
-      clearTimeout(timeout);
+      clearTimeout(loadTimer.current);
+      cancelAnimationFrame(frame);
+      cancelAnimationFrame(resizeFrame);
       observer?.disconnect();
+      clearMapMarkers(markerCache);
+      lastCamera.current = "";
+      userMarker.current?.remove();
+      userMarker.current = null;
+      locationPending.current = false;
       instance?.remove();
       map.current = null;
     };
@@ -173,62 +269,147 @@ export default function DiscoveryMap({
   useEffect(() => {
     if (map.current && style && previousStyle.current !== style) {
       setStatus("Loading map style ");
-      map.current.setStyle(style);
+      loading.current = { pending: true, applied: false, error: false };
+      clearTimeout(loadTimer.current);
+      loadTimer.current = setTimeout(
+        () =>
+          setStatus(
+            "Map style is taking too long to load. Check your connection and retry.",
+          ),
+        25000,
+      );
+      const targetMap = map.current;
+      map.current.setStyle(style, {
+        transformStyle: (_previous, next) => {
+          if (map.current === targetMap) loading.current.applied = true;
+          return next;
+        },
+      });
     }
     previousStyle.current = style;
   }, [style]);
+  const routeData = useMemo(() => routeFeatures(geometry), [geometry]);
+  useEffect(() => {
+    const instance = map.current;
+    // An existing GeoJSON worker may be busy; setData queues the latest update.
+    // isStyleLoaded() also includes that worker and would silently drop edits.
+    if (!instance || !ready || loading.current.pending) return;
+    try {
+      const existing = instance.getSource("routes");
+      if (existing) existing.setData(routeData);
+      else instance.addSource("routes", { type: "geojson", data: routeData });
+      if (!instance.getLayer("routes"))
+        instance.addLayer({
+          id: "routes",
+          type: "line",
+          source: "routes",
+          paint: { "line-color": "#ED633E", "line-width": 4 },
+          layout: { "line-join": "round", "line-cap": "round" },
+        });
+    } catch {
+      const timer = setTimeout(
+        () =>
+          setStatus(
+            "Map provider unavailable or route rendering failed. Retry the map; GPS recording remains independent.",
+          ),
+        0,
+      );
+      return () => clearTimeout(timer);
+    }
+  }, [routeData, ready]);
+  useEffect(() => {
+    if (map.current?.getLayer("routes"))
+      map.current.setPaintProperty("routes", "line-color", [
+        "case",
+        ["==", ["get", "id"], selectedId ?? ""],
+        "#167F83",
+        "#ED633E",
+      ]);
+  }, [selectedId, ready]);
   useEffect(() => {
     const instance = map.current,
       lib = library.current;
-    if (!instance || !lib || !ready || !instance.isStyleLoaded()) return;
-    const data = routeFeatures(geometry);
-    if (instance.getSource("routes"))
-      instance.getSource("routes")!.setData(data);
-    else {
-      instance.addSource("routes", { type: "geojson", data });
-      instance.addLayer({
-        id: "routes",
-        type: "line",
-        source: "routes",
-        paint: { "line-color": "#ED633E", "line-width": 4 },
-        layout: { "line-join": "round", "line-cap": "round" },
-      });
-    }
-    const markers = onWaypoint
-      ? geometry.flatMap((route) =>
-          route.points.filter(validCoordinate).map((point, index) => {
-            const element = document.createElement("span");
-            element.textContent = String(index + 1);
-            element.setAttribute("aria-label", "Waypoint " + (index + 1));
-            element.style.cssText =
-              "background:#ED633E;color:white;border:2px solid white;border-radius:50%;width:30px;height:30px;display:grid;place-items:center;font-weight:bold;pointer-events:none";
-            return new lib.Marker({ element })
-              .setLngLat([point.longitude, point.latitude])
-              .addTo(instance);
+    if (!instance || !lib || !ready) return;
+    const items: MapMarker[] = [];
+    if (onWaypoint) {
+      for (const route of geometry)
+        route.points.filter(validCoordinate).forEach((point, index) =>
+          items.push({
+            id: route.id + ":waypoint:" + index,
+            ...point,
+            label: "Waypoint " + (index + 1),
+            text: String(index + 1),
+            kind: "waypoint",
           }),
-        )
-      : geometry.flatMap((route) => {
-          const point = route.points.find(validCoordinate);
-          if (!point) return [];
-          const button = document.createElement("button");
-          button.textContent = "\u25cf";
-          button.title = `${route.title}   ${route.kind === "plan" ? "Straight-line plan" : "Recorded GPS"}`;
-          button.setAttribute("aria-label", button.title);
-          button.style.cssText =
-            "background:#fff;color:#255E49;border:2px solid #255E49;border-radius:50%;width:36px;height:36px;cursor:pointer";
-          button.onclick = () => {
-            latest.current.onSelect?.(route.id);
-            const p = route.points.filter(validCoordinate);
-            if (p.length) fit(p.map((v) => [v.longitude, v.latitude]));
-          };
-          return [
-            new lib.Marker({ element: button })
-              .setLngLat([point.longitude, point.latitude])
-              .addTo(instance),
-          ];
+        );
+    } else if (!tracking) {
+      for (const route of geometry) {
+        const point = route.points.find(validCoordinate);
+        if (point)
+          items.push({
+            id: "route:" + route.id,
+            ...point,
+            label:
+              route.title +
+              "   " +
+              (route.kind === "plan" ? "Straight-line plan" : "Recorded GPS"),
+            text: "●",
+            kind: "route",
+            selected: route.id === selectedId,
+            onClick: () => {
+              if (
+                latest.current.onSelect &&
+                latest.current.selectedId !== route.id
+              )
+                latest.current.onSelect(route.id);
+              else
+                fit(
+                  route.points
+                    .filter(validCoordinate)
+                    .map((p) => [p.longitude, p.latitude]),
+                );
+            },
+          });
+      }
+    }
+    if (variant === "explore")
+      for (const place of areaPlaces[area])
+        items.push({
+          id: "place:" + area + place.name,
+          ...place,
+          kind: "place",
+          text: "◇",
+          label: place.name + " · Destination reference, not a verified trail",
+          onClick: () => {
+            instance.flyTo({
+              center: [place.longitude, place.latitude],
+              zoom: 13,
+              duration: 300,
+            });
+            setLocationStatus(
+              place.name + " · Destination reference, not a verified trail",
+            );
+          },
         });
-    return () => markers.forEach((marker) => marker.remove());
-  }, [geometry, ready, onWaypoint]);
+    if (acceptedPoint)
+      items.push({
+        id: "accepted-location",
+        ...acceptedPoint,
+        kind: "accepted",
+        text: "",
+        label: "Latest accepted GPS location",
+      });
+    syncMapMarkers(lib, instance, markers.current, items);
+  }, [
+    geometry,
+    ready,
+    onWaypoint,
+    tracking,
+    area,
+    selectedId,
+    acceptedPoint,
+    variant,
+  ]);
   function fit(coordinates: number[][]) {
     if (!coordinates.length) return;
     const lng = coordinates.map((p) => p[0]),
@@ -241,17 +422,12 @@ export default function DiscoveryMap({
       { padding: 45, maxZoom: 15, duration: 0 },
     );
   }
-  const previousFit = useRef({ request: -1, ready: -1 });
+  const previousFit = useRef("");
   useEffect(() => {
-    if (!ready) return;
-    if (onWaypoint) {
-      if (
-        previousFit.current.request === fitRequest &&
-        previousFit.current.ready === ready
-      )
-        return;
-      previousFit.current = { request: fitRequest, ready };
-    }
+    if (!ready || tracking) return;
+    const intent = JSON.stringify([area, selectedId, fitRequest, retry]);
+    if (previousFit.current === intent) return;
+    previousFit.current = intent;
     const selected =
       geometry.find((r) => r.id === selectedId) ??
       (points?.length ? geometry[0] : undefined);
@@ -269,9 +445,100 @@ export default function DiscoveryMap({
         duration: 0,
       });
     }
-  }, [area, selectedId, geometry, points, ready, fitRequest, onWaypoint]);
+  }, [area, selectedId, geometry, points, ready, fitRequest, tracking, retry]);
+  const acceptedLongitude = acceptedPoint?.longitude;
+  const acceptedLatitude = acceptedPoint?.latitude;
+  useEffect(() => {
+    if (acceptedLongitude !== undefined && acceptedLatitude !== undefined) {
+      userMarker.current?.remove();
+      userMarker.current = null;
+    }
+    if (
+      ready &&
+      tracking &&
+      following &&
+      acceptedLongitude !== undefined &&
+      acceptedLatitude !== undefined
+    ) {
+      const target = `${acceptedLongitude}:${acceptedLatitude}`;
+      if (lastCamera.current !== target) {
+        lastCamera.current = target;
+        map.current?.flyTo({
+          center: [acceptedLongitude, acceptedLatitude],
+          zoom: 15,
+          duration: 300,
+        });
+      }
+    }
+  }, [acceptedLongitude, acceptedLatitude, ready, tracking, following]);
+  function recenter() {
+    if (tracking) {
+      const accepted = latest.current.acceptedPoint;
+      if (accepted) centerAccepted(accepted);
+      else if (
+        mapLocation.current &&
+        Date.now() - mapLocation.current.timestamp <= 60000
+      )
+        centerApproximate(mapLocation.current);
+      else locate();
+      return;
+    }
+    const selected =
+      geometry.find((route) => route.id === selectedId) ??
+      (points?.length ? geometry[0] : undefined);
+    if (selected)
+      fit(
+        selected.points
+          .filter(validCoordinate)
+          .map((p) => [p.longitude, p.latitude]),
+      );
+    else {
+      const region = areaRegions[area];
+      map.current?.flyTo({
+        center: [region.longitude, region.latitude],
+        zoom: 11,
+        duration: 400,
+      });
+    }
+  }
   const userMarker = useRef<BrowserMarker | null>(null),
     locationAttempt = useRef(0);
+  const mapLocation = useRef<MapLocation | null>(null);
+  const locationPending = useRef(false);
+  function centerAccepted(point: { longitude: number; latitude: number }) {
+    map.current?.stop?.();
+    map.current?.flyTo({
+      center: [point.longitude, point.latitude],
+      zoom: 15,
+      duration: 300,
+    });
+    lastCamera.current = `${point.longitude}:${point.latitude}`;
+    setFollowing(true);
+    userMarker.current?.remove();
+    userMarker.current = null;
+    setLocationStatus("Centered on the latest accepted GPS location.");
+  }
+  function centerApproximate(point: MapLocation) {
+    if (!map.current || !library.current) return;
+    userMarker.current?.remove();
+    const element = document.createElement("span");
+    element.setAttribute("role", "img");
+    element.setAttribute("aria-label", "Approximate map-only location");
+    element.style.cssText =
+      "display:block;width:18px;height:18px;border-radius:50%;background:#2C73B9;border:3px solid white;box-shadow:0 0 0 6px #2C73B933";
+    userMarker.current = new library.current.Marker({ element })
+      .setLngLat([point.longitude, point.latitude])
+      .addTo(map.current);
+    map.current.stop?.();
+    map.current.flyTo({
+      center: [point.longitude, point.latitude],
+      zoom: 14,
+      duration: 300,
+    });
+    setLocationStatus(
+      `Approximate location: about ${Math.ceil(point.accuracy)} m. Map only; recording still requires 35 m or better.`,
+    );
+  }
   useEffect(
     () => () => {
       locationAttempt.current++;
@@ -280,12 +547,19 @@ export default function DiscoveryMap({
     [],
   );
   function locate() {
+    if (locationPending.current) return;
+    if (!window.isSecureContext) {
+      setLocationStatus("Map location requires HTTPS or localhost.");
+      return;
+    }
     const attempt = ++locationAttempt.current;
     if (!navigator.geolocation) {
       setLocationStatus("Location is unavailable in this browser.");
       return;
     }
     setLocationStatus("Requesting location permission ");
+    locationPending.current = true;
+    setLocating(true);
     navigator.geolocation.getCurrentPosition(
       (position) => {
         if (
@@ -294,23 +568,35 @@ export default function DiscoveryMap({
           !library.current
         )
           return;
-        const coord = [position.coords.longitude, position.coords.latitude];
-        userMarker.current?.remove();
-        userMarker.current = new library.current.Marker({ color: "#2463eb" })
-          .setLngLat(coord)
-          .addTo(map.current);
-        map.current.flyTo({ center: coord, zoom: 14 });
-        setLocationStatus(
-          "Location shown on this device. No route was shared.",
-        );
+        locationPending.current = false;
+        setLocating(false);
+        const accepted = latest.current.acceptedPoint;
+        if (tracking && accepted) {
+          centerAccepted(accepted);
+          return;
+        }
+        const point = mapOnlyLocation(position);
+        if (!point) {
+          setLocationStatus(
+            "The browser returned stale or invalid map location. Retry location access.",
+          );
+          return;
+        }
+        mapLocation.current = point;
+        centerApproximate(point);
       },
       (error) => {
-        if (attempt === locationAttempt.current)
+        if (attempt === locationAttempt.current) {
+          locationPending.current = false;
+          setLocating(false);
           setLocationStatus(
             error.code === 1
               ? "Location permission denied. You can still explore the map."
-              : "Unable to get your location. Try again outdoors.",
+              : error.code === 3
+                ? "Map location timed out. Retry location access."
+                : "Location is unavailable. Check device location services and retry.",
           );
+        }
       },
       { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 },
     );
@@ -363,61 +649,137 @@ export default function DiscoveryMap({
   }, [key, query]);
   const buttonStyle = {
     fontFamily: "inherit",
-    fontSize: 12,
-    minHeight: 40,
-    borderRadius: 8,
+    fontSize: 13,
+    fontWeight: 600,
+    minHeight: 44,
+    borderRadius: 10,
     border: `1px solid ${c.border}`,
     background: c.panel,
     color: c.text,
-    padding: "6px 10px",
+    padding: "8px 12px",
     cursor: "pointer",
   };
   return (
     <section
+      className="sk-map"
       aria-label={`Interactive map of ${area === "valley" ? "Kathmandu Valley" : "Pokhara"}`}
       style={{
         fontFamily: "Arial, sans-serif",
         color: c.text,
         background: c.panel,
         border: `1px solid ${c.border}`,
-        borderRadius: 14,
+        borderRadius: 16,
         overflow: "hidden",
       }}
     >
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, padding: 8 }}>
+      <style>
+        {
+          ".sk-map button:disabled{opacity:.45;cursor:not-allowed}.sk-map button:focus-visible,.sk-map input:focus-visible{outline:3px solid #38a6a3;outline-offset:2px}.sk-map .maplibregl-ctrl-group button{width:44px;height:44px}.sk-map .maplibregl-ctrl-attrib{font-size:11px}"
+        }
+      </style>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 6,
+          padding: 10,
+        }}
+      >
+        <div style={{ display: "flex", gap: 6, minWidth: 0 }}>
+          {tracking ? (
+            <button
+              style={buttonStyle}
+              aria-label="Follow location"
+              title="Follow accepted workout GPS only"
+              disabled={!ready || !acceptedPoint}
+              aria-pressed={following ? Boolean(acceptedPoint) : false}
+              onClick={() => {
+                lastCamera.current = "";
+                setFollowing((value) => !value);
+              }}
+            >
+              Follow
+            </button>
+          ) : (
+            <button
+              style={buttonStyle}
+              disabled={!ready || locating || offline}
+              onClick={locate}
+            >
+              My location
+            </button>
+          )}
+          <button
+            style={buttonStyle}
+            aria-label={tracking ? "Recenter location" : "Recenter map"}
+            disabled={!ready || locating}
+            onClick={recenter}
+          >
+            {locating ? "Locating..." : "Recenter"}
+          </button>
+        </div>
         <button
           style={buttonStyle}
-          disabled={!ready || offline}
-          onClick={locate}
+          aria-label="Map options"
+          aria-expanded={optionsOpen}
+          onClick={() => setOptionsOpen((value) => !value)}
         >
-          My location
+          Options
         </button>
-        <button
-          style={buttonStyle}
-          disabled={!key}
-          aria-pressed={terrain}
-          onClick={() => setTerrain((v) => !v)}
-        >
-          {terrain ? "Street map" : "Outdoor map"}
-        </button>
-        {key ? (
-          <input
-            aria-label="Search map places"
-            placeholder="Search places in Nepal"
-            value={query}
-            onChange={(e) => {
-              setResults([]);
-              setQuery(e.target.value);
-            }}
-            style={{
-              ...buttonStyle,
-              width: 190,
-              maxWidth: "100%",
-              boxSizing: "border-box",
-            }}
-          />
-        ) : null}
       </div>
+      {optionsOpen ? (
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            alignItems: "center",
+            gap: 8,
+            padding: "0 10px 10px",
+            borderBottom: "1px solid " + c.border,
+          }}
+        >
+          <button
+            style={buttonStyle}
+            disabled={!key || !ready || status.startsWith("Loading")}
+            aria-pressed={terrain}
+            onClick={() => setTerrain((value) => !value)}
+          >
+            {terrain ? "Street map" : "Outdoor map"}
+          </button>
+          {key ? (
+            <input
+              aria-label="Search map places"
+              placeholder="Search places in Nepal"
+              value={query}
+              onChange={(event) => {
+                setResults([]);
+                setQuery(event.target.value);
+              }}
+              style={{
+                ...buttonStyle,
+                flex: "1 1 160px",
+                width: 160,
+                minWidth: 0,
+                boxSizing: "border-box",
+              }}
+            />
+          ) : null}
+          {key ? (
+            <span
+              style={{
+                fontSize: 12,
+                lineHeight: "18px",
+                color: c.muted,
+                flexBasis: "100%",
+              }}
+            >
+              Place searches are sent to MapTiler. Saved route geometry stays on
+              this device.
+            </span>
+          ) : null}
+        </div>
+      ) : null}
       {results.map((r, i) => (
         <button
           key={i}
@@ -436,11 +798,25 @@ export default function DiscoveryMap({
           ref={host}
           style={{ width: "100%", height: "100%", background: c.greenSoft }}
         />
+        {key ? (
+          <a
+            href="https://www.maptiler.com"
+            aria-label="MapTiler map provider"
+            style={{ position: "absolute", left: 10, bottom: 30, zIndex: 1 }}
+          >
+            <img
+              src="https://api.maptiler.com/resources/logo.svg"
+              alt="MapTiler logo"
+              width={100}
+            />
+          </a>
+        ) : null}
         {status || offline ? (
           <div
             role="status"
             style={{
               position: "absolute",
+              pointerEvents: "none",
               left: 12,
               right: 50,
               top: 12,
@@ -455,8 +831,10 @@ export default function DiscoveryMap({
               : status}
             {style && !status.startsWith("Loading") ? (
               <button
-                style={buttonStyle}
+                style={{ ...buttonStyle, pointerEvents: "auto", marginLeft: 8 }}
                 onClick={() => {
+                  locationPending.current = false;
+                  setLocating(false);
                   setReady(0);
                   locationAttempt.current++;
                   setRetry((v) => v + 1);
@@ -470,20 +848,32 @@ export default function DiscoveryMap({
       </div>
       <div
         aria-live="polite"
-        style={{ padding: "7px 10px", fontSize: 11, lineHeight: "17px" }}
+        style={{
+          padding: "10px 12px",
+          fontSize: 12,
+          lineHeight: "18px",
+          color: c.muted,
+        }}
       >
-        {config?.development
-          ? "DEVELOPMENT STYLE   MapLibre demo tiles   local testing only. "
-          : ""}
-        {!geometry.length
+        {config?.development ? "Development map style. " : ""}
+        {variant === "explore" && geometry.length === 0
           ? "No saved route geometry. "
-          : "Orange lines: your saved geometry; plans use straight lines. "}
-        {locationStatus ||
+          : ""}
+        {(tracking && acceptedPoint && locationStatus.startsWith("Approximate")
+          ? "Teal marks the latest accepted GPS location."
+          : locationStatus) ||
           searchStatus ||
-          "Use arrow keys to pan and + / - to zoom. Location is requested only when you choose My location."}
-        {key
-          ? " Place searches are sent to MapTiler; your GPS and route geometry are not uploaded."
-          : null}
+          (tracking
+            ? "Teal marks accepted GPS. Recenter can use a map-only position."
+            : variant === "activity"
+              ? "Recorded GPS. Pauses and signal gaps stay separate."
+              : variant === "planner"
+                ? "Straight-line waypoints, not road-following directions."
+                : geometry.length
+                  ? "Orange routes; teal selection. Plans use straight lines."
+                  : variant === "explore"
+                    ? "Browse Nepal or open Route Studio."
+                    : "No saved route geometry.")}
       </div>
     </section>
   );

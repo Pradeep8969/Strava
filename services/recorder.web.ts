@@ -9,11 +9,17 @@ import {
 import { readWorkouts, writeWorkout, deleteWorkout, serial } from "./database";
 import { mutateWorkout, useApp } from "../store/app";
 import type { Sport, Workout } from "../types/activity";
+import {
+  useGpsAcquisition,
+  validateAcquisition,
+  WaitingForGpsError,
+} from "../features/recording/acquisition";
 let activeId: string | null = null;
 let watchId: number | null = null;
 let watchdog: ReturnType<typeof setInterval> | null = null;
 let generation = 0;
 let lastEvidence = 0;
+let interruptedAt: number | null = null;
 let commands: Promise<unknown> = Promise.resolve();
 function command<T>(work: () => Promise<T>): Promise<T> {
   const next = commands.then(work);
@@ -42,26 +48,35 @@ function requireForeground() {
     );
 }
 async function locate() {
-  requireForeground();
-  const position = await new Promise<GeolocationPosition>((resolve, reject) => {
-    navigator.geolocation.getCurrentPosition(
-      resolve,
-      (error) => reject(new Error(browserLocationError(error))),
-      { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 },
-    );
+  useGpsAcquisition.setState({
+    state: "acquiring",
+    detail:
+      "Allow browser location access if prompted. Requesting a fresh fix with accuracy of 35 m or better.",
   });
-  requireForeground();
-  const point = browserPoint(position);
-  if (!freshBrowserPoint(point))
-    throw new Error(
-      "GPS is stale or not accurate enough. Move outdoors and try again; accuracy must be within 35 metres.",
+  try {
+    requireForeground();
+    const position = await new Promise<GeolocationPosition>(
+      (resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(
+          resolve,
+          (error) => reject(new Error(browserLocationError(error))),
+          { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 },
+        );
+      },
     );
-  return point;
+    requireForeground();
+    return validateAcquisition(browserPoint(position));
+  } catch (error) {
+    if (!(error instanceof WaitingForGpsError))
+      useGpsAcquisition.setState({ state: "error", detail: "" });
+    throw error;
+  }
 }
 function loseSignal(message: string) {
   const id = activeId;
   if (!id) return;
   const evidence = lastEvidence;
+  interruptedAt = evidence;
   stop();
   // Stop the visible timer even if persisting the pause fails (quota/permissions).
   useApp.setState((state) => ({
@@ -147,6 +162,7 @@ export function startWorkout(sport: Sport, ownerId?: string) {
     });
     await useApp.getState().refresh();
     lastEvidence = point.timestamp;
+    interruptedAt = null;
     try {
       requireForeground();
       watch(workout.id);
@@ -160,8 +176,8 @@ export function startWorkout(sport: Sport, ownerId?: string) {
 }
 export function pauseWorkout(id: string) {
   return command(async () => {
+    await mutateWorkout(id, (w) => pause(w, interruptedAt ?? Date.now()));
     stop();
-    await mutateWorkout(id, (w) => pause(w));
   });
 }
 export function resumeWorkout(id: string) {
@@ -184,6 +200,7 @@ export function resumeWorkout(id: string) {
     stop();
     await mutateWorkout(id, (w) => addPoint(resume(w, point.timestamp), point));
     lastEvidence = point.timestamp;
+    interruptedAt = null;
     try {
       requireForeground();
       watch(id);
@@ -196,12 +213,17 @@ export function resumeWorkout(id: string) {
 }
 export function finishWorkout(id: string) {
   return command(async () => {
-    stop();
     await mutateWorkout(id, (w) =>
       w.state === "finished"
         ? w
-        : { ...pause(w), state: "finished", endedAt: Date.now() },
+        : {
+            ...pause(w, interruptedAt ?? Date.now()),
+            state: "finished",
+            endedAt: Date.now(),
+          },
     );
+    stop();
+    useGpsAcquisition.setState({ state: "idle", detail: "" });
   });
 }
 export function discardWorkout(id: string) {
@@ -212,6 +234,7 @@ export function discardWorkout(id: string) {
       throw new Error("Use Activities to delete a completed workout.");
     await deleteWorkout(id);
     await useApp.getState().refresh();
+    useGpsAcquisition.setState({ state: "idle", detail: "" });
   });
 }
 export async function enableBackground(_id: string) {

@@ -8,6 +8,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useApp } from "../../store/app";
 import { useColors } from "../../components/ui";
 import { useSync } from "../../hooks/useSync";
+import { useRouteSync } from "../../hooks/useRouteSync";
 import {
   installRecorderLifecycle,
   recoverRecording,
@@ -26,6 +27,7 @@ export default function Layout() {
 }
 function AppLayout() {
   useSync();
+  useRouteSync();
   const c = useColors(),
     theme = useApp((s) => s.preferences.theme);
   useEffect(() => {

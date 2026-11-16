@@ -1,6 +1,6 @@
-import { useCallback, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Pressable, View, useWindowDimensions } from "react-native";
-import { router, useFocusEffect } from "expo-router";
+import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import {
   AthletePage,
@@ -16,11 +16,13 @@ import {
   SportFilters,
 } from "../../../components/discovery-ui";
 import DiscoveryMap from "../../../components/DiscoveryMap";
+import { routeDistance } from "../../../features/discovery/map-data";
 import { useSession } from "../../../hooks/useSession";
 import { canAccessLocalWorkout } from "../../../features/auth/local-access";
 import type { MapRoute } from "../../../features/discovery/map-data";
 import { useColors } from "../../../components/ui";
-import { getValue } from "../../../services/database";
+import { useRouteLibrary, routeStatus } from "../../../hooks/useRouteLibrary";
+import { retryRouteSync } from "../../../hooks/useRouteSync";
 import { useApp } from "../../../store/app";
 import { length } from "../../../utils/format";
 import {
@@ -29,10 +31,13 @@ import {
   waypointElevation,
   type Area,
   type DiscoverySport,
-  type SavedRoute,
 } from "../../../features/discovery/catalog";
 
 export default function Explore() {
+  const user = useSession()?.user.id;
+  return <ExploreLibrary key={user ?? "local"} />;
+}
+function ExploreLibrary() {
   const c = useColors(),
     wide = useWindowDimensions().width >= 1100;
   const units = useApp((state) => state.preferences.units);
@@ -40,29 +45,10 @@ export default function Explore() {
   const userId = useSession()?.user.id;
   const [sport, setSport] = useState<DiscoverySport>("All"),
     [search, setSearch] = useState("");
-  const [routes, setRoutes] = useState<SavedRoute[]>([]),
-    [selected, setSelected] = useState<string | null>(null),
-    [area, setArea] = useState<Area>("valley"),
-    [error, setError] = useState("");
+  const { plans: routes, warning: error } = useRouteLibrary();
+  const [selected, setSelected] = useState<string | null>(null),
+    [area, setArea] = useState<Area>("valley");
   const [destination, setDestination] = useState<string | null>(null);
-  useFocusEffect(
-    useCallback(() => {
-      let active = true;
-      void getValue<SavedRoute[]>("routes")
-        .then((saved) => {
-          if (active) {
-            setRoutes(saved ?? []);
-            setError("");
-          }
-        })
-        .catch((e) => {
-          if (active) setError(String(e));
-        });
-      return () => {
-        active = false;
-      };
-    }, []),
-  );
   const ideas = filterIdeas(search, sport),
     chosen = routes.find((route) => route.id === selected);
   const mapRoutes = useMemo<MapRoute[]>(
@@ -103,6 +89,10 @@ export default function Explore() {
     [routes, search],
   );
   const selectedMapRoute = mapRoutes.find((route) => route.id === selected);
+  const selectedDistance = useMemo(
+    () => (selectedMapRoute ? routeDistance(selectedMapRoute) : 0),
+    [selectedMapRoute],
+  );
   const panel = {
     backgroundColor: c.panel,
     borderWidth: 1,
@@ -155,7 +145,7 @@ export default function Explore() {
           alignItems: "stretch",
         }}
       >
-        <View style={{ flex: wide ? 1.4 : undefined, minWidth: 0, gap: 12 }}>
+        <View style={{ flex: wide ? 1.8 : undefined, minWidth: 0, gap: 14 }}>
           <View
             style={{
               flexDirection: "row",
@@ -204,7 +194,8 @@ export default function Explore() {
             routes={mapRoutes}
             selectedId={selected}
             onSelect={setSelected}
-            height={wide ? 490 : 240}
+            height={wide ? 540 : 380}
+            variant="explore"
           />
           <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
             <Ionicons
@@ -237,14 +228,32 @@ export default function Explore() {
               </Pressable>
             ) : null}
           </View>
+          {selectedMapRoute ? (
+            <View style={[panel, { padding: 14, gap: 8 }]}>
+              <Text style={{ color: c.text, fontSize: 15, fontWeight: "700" }}>
+                {selectedMapRoute.title}
+              </Text>
+              <Text style={{ color: c.muted, fontSize: 12 }}>
+                {selectedMapRoute.kind === "plan"
+                  ? "Approximate straight-line distance"
+                  : "Recorded GPS distance"}
+                : {length(selectedDistance, units)} {units} ·{" "}
+                {selectedMapRoute.points.length}{" "}
+                {selectedMapRoute.kind === "plan" ? "waypoints" : "GPS fixes"}
+              </Text>
+              <Text style={{ color: c.muted, fontSize: 11 }}>
+                Roads, trails, terrain and access restrictions are not verified.
+              </Text>
+            </View>
+          ) : null}
           {wide ? (
             <View style={[panel, { padding: 17, gap: 10 }]}>
               <Text style={{ color: c.text, fontSize: 16, fontWeight: "700" }}>
                 Make the route your own.
               </Text>
               <Text style={{ color: c.muted, fontSize: 12, lineHeight: 19 }}>
-                Plan with waypoints in Route studio. Saved geometry stays on
-                this device.
+                Plan with waypoints in Route studio. New account routes sync
+                privately across devices; local-only routes stay on this device.
               </Text>
               <DiscoveryButton
                 title="Open route studio"
@@ -286,7 +295,7 @@ export default function Explore() {
                   <View>
                     <Photo
                       kind={idea.photo}
-                      height={wide ? 150 : 120}
+                      height={wide ? 112 : 120}
                       label={`${idea.title} · Nepal-inspired editorial artwork`}
                     />
                     <View style={{ position: "absolute", left: 8, top: 8 }}>
@@ -312,7 +321,7 @@ export default function Explore() {
                       {idea.title}
                     </Text>
                     <Text
-                      style={{ color: c.muted, fontSize: 10, lineHeight: 15 }}
+                      style={{ color: c.muted, fontSize: 12, lineHeight: 18 }}
                     >
                       {idea.region}
                     </Text>
@@ -364,6 +373,13 @@ export default function Explore() {
             action="Route studio"
             onPress={() => router.push("/routes")}
           />
+          {userId ? (
+            <DiscoveryButton
+              title="Retry Sync"
+              secondary
+              onPress={retryRouteSync}
+            />
+          ) : null}
           {error ? (
             <Text
               accessibilityRole="alert"
@@ -375,7 +391,7 @@ export default function Explore() {
           {saved.length ? (
             saved.map((route) => (
               <Pressable
-                key={route.id}
+                key={`${route.accountId ?? "local"}:${route.id}`}
                 accessibilityRole="button"
                 accessibilityLabel={`Preview saved route ${route.title}`}
                 onPress={() => setSelected(route.id)}
@@ -411,6 +427,9 @@ export default function Explore() {
                 <Text style={{ color: c.muted, fontSize: 11 }}>
                   {length(route.meters, units)} {units} · {route.points.length}{" "}
                   waypoints · Straight-line plan
+                </Text>
+                <Text style={{ color: c.muted, fontSize: 11 }}>
+                  {routeStatus(route)}
                 </Text>
                 {route.elevation !== null ? (
                   <Text style={{ color: c.forest, fontSize: 11 }}>

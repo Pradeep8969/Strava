@@ -54,6 +54,50 @@ export async function setValue(key: string, value: unknown) {
     JSON.stringify(value),
   );
 }
+/** A dedicated SQLite transaction connection prevents unrelated recorder queries
+ * joining the transaction. Acquire the write reservation before reading kv. */
+export async function updateValue<T>(
+  key: string,
+  update: (value: T | null) => T,
+): Promise<T> {
+  return serial(async () => {
+    let next!: T, callbackError: unknown;
+    try {
+      await (
+        await database()
+      ).withExclusiveTransactionAsync(async (tx) => {
+        await tx.runAsync("UPDATE kv SET body = body WHERE key = ?", key);
+        const row = await tx.getFirstAsync<{ body: string }>(
+          "SELECT body FROM kv WHERE key = ?",
+          key,
+        );
+        try {
+          next = update(row ? (JSON.parse(row.body) as T) : null);
+          if (next && typeof (next as { then?: unknown }).then === "function")
+            throw new Error(
+              "Atomic storage updates must be synchronous. The route was not saved.",
+            );
+        } catch (error) {
+          callbackError = error;
+          throw error;
+        }
+        await tx.runAsync(
+          "INSERT OR REPLACE INTO kv(key, body) VALUES (?, ?)",
+          key,
+          JSON.stringify(next),
+        );
+      });
+      return next;
+    } catch {
+      throw (
+        callbackError ??
+        new Error(
+          "Atomic route storage failed. The route was not saved. Check storage permissions and space, then retry.",
+        )
+      );
+    }
+  });
+}
 export async function pendingDeletionIds(): Promise<string[]> {
   const rows = await (
     await database()

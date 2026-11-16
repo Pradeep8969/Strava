@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Platform, View } from "react-native";
 import MapView, { Marker, Polyline } from "react-native-maps";
 import { AthleteText as Text } from "./athlete";
-import { useColors } from "./ui";
+import { Button, useColors } from "./ui";
 import { areaPlaces, areaRegions } from "../features/discovery/catalog";
 import type { TrackPoint } from "../types/activity";
 import {
@@ -24,6 +24,17 @@ export default function DiscoveryMap({
   const map = useRef<MapView>(null),
     ready = useRef(false),
     c = useColors();
+  const [status, setStatus] = useState("Loading map…");
+  const [retry, setRetry] = useState(0);
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (!ready.current)
+        setStatus(
+          "Map unavailable. Check your connection and native map configuration, then retry.",
+        );
+    }, 25000);
+    return () => clearTimeout(timer);
+  }, [retry]);
   const fit = useCallback(() => {
     if (!ready.current) return;
     const valid = points.filter(validCoordinate);
@@ -47,30 +58,6 @@ export default function DiscoveryMap({
           gap: 10,
         }}
       >
-        {routes.flatMap((route) =>
-          mapSegments(route).map((group, i) => (
-            <Polyline
-              key={`${route.id}:${i}`}
-              coordinates={group}
-              strokeColor="#ED633E"
-              strokeWidth={4}
-            />
-          )),
-        )}
-        {routes.map((route) => {
-          const point = route.points.find(validCoordinate);
-          return point ? (
-            <Marker
-              key={route.id}
-              coordinate={point}
-              title={route.title}
-              description={
-                route.kind === "plan" ? "Straight-line plan" : "Recorded GPS"
-              }
-              onPress={() => onSelect?.(route.id)}
-            />
-          ) : null;
-        })}
         <Text style={{ color: c.text, fontSize: 18, fontWeight: "700" }}>
           Explore Nepal
         </Text>
@@ -81,34 +68,77 @@ export default function DiscoveryMap({
       </View>
     );
   return (
-    <View style={{ height, borderRadius: 14, overflow: "hidden" }}>
-      <MapView
-        ref={map}
-        style={{ flex: 1 }}
-        initialRegion={areaRegions[area]}
-        onMapReady={() => {
-          ready.current = true;
-          fit();
-        }}
-        userInterfaceStyle={c.bg === "#F6F7F4" ? "light" : "dark"}
-      >
-        {points.length > 1 && !routes.length ? (
-          <Polyline
-            coordinates={points}
-            strokeColor="#ED633E"
-            strokeWidth={4}
-          />
-        ) : (
-          areaPlaces[area].map((place) => (
-            <Marker
-              key={place.name}
-              coordinate={place}
-              title={place.name}
-              description="Destination reference · not a mapped trail"
+    <View style={{ gap: 8 }}>
+      <Button secondary title="Recenter map" onPress={fit} />
+      <View style={{ height, borderRadius: 14, overflow: "hidden" }}>
+        <MapView
+          key={retry}
+          ref={map}
+          style={{ flex: 1 }}
+          initialRegion={areaRegions[area]}
+          onMapReady={() => {
+            ready.current = true;
+            setStatus("");
+            fit();
+          }}
+          userInterfaceStyle={c.bg === "#F6F7F4" ? "light" : "dark"}
+        >
+          {routes.flatMap((route) =>
+            mapSegments(route).map((group, i) => (
+              <Polyline
+                key={`${route.id}:${i}`}
+                coordinates={group}
+                strokeColor={route.id === selectedId ? "#167F83" : "#ED633E"}
+                strokeWidth={4}
+              />
+            )),
+          )}
+          {routes.map((route) => {
+            const point = route.points.find(validCoordinate);
+            return point ? (
+              <Marker
+                key={route.id}
+                coordinate={point}
+                title={route.title}
+                description={
+                  route.kind === "plan" ? "Straight-line plan" : "Recorded GPS"
+                }
+                onPress={() => onSelect?.(route.id)}
+              />
+            ) : null;
+          })}
+          {points.length > 1 && !routes.length ? (
+            <Polyline
+              coordinates={points}
+              strokeColor="#ED633E"
+              strokeWidth={4}
             />
-          ))
-        )}
-      </MapView>
+          ) : (
+            areaPlaces[area].map((place) => (
+              <Marker
+                key={place.name}
+                coordinate={place}
+                title={place.name}
+                description="Destination reference · not a mapped trail"
+              />
+            ))
+          )}
+        </MapView>
+      </View>
+      {status ? (
+        <>
+          <Text style={{ color: c.muted }}>{status}</Text>
+          <Button
+            secondary
+            title="Retry map"
+            onPress={() => {
+              ready.current = false;
+              setStatus("Loading map…");
+              setRetry((v) => v + 1);
+            }}
+          />
+        </>
+      ) : null}
     </View>
   );
 }

@@ -18,6 +18,45 @@ let watcher: Location.LocationSubscription | null = null;
 let foregroundId: string | null = null;
 let autoPaused = false;
 let stationarySince: number | null = null;
+let generation = 0;
+let interruptedAt: number | null = null;
+let commands: Promise<unknown> = Promise.resolve();
+function command<T>(work: () => Promise<T>): Promise<T> {
+  const next = commands.then(work);
+  commands = next.catch(() => undefined);
+  return next;
+}
+function detachForeground() {
+  generation++;
+  watcher?.remove();
+  watcher = null;
+  foregroundId = null;
+}
+function reportSaveFailure(id: string, error: unknown, gpsError = false) {
+  detachForeground();
+  const workout = useApp.getState().workouts.find((w) => w.id === id);
+  if (workout)
+    interruptedAt = Math.max(
+      workout.resumedAt ?? workout.startedAt,
+      workout.points.at(-1)?.timestamp ?? workout.startedAt,
+    );
+  useApp.setState((state) => ({
+    workouts: state.workouts.map((w) =>
+      w.id === id
+        ? pause(
+            w,
+            Math.max(
+              w.resumedAt ?? w.startedAt,
+              w.points.at(-1)?.timestamp ?? w.startedAt,
+            ),
+          )
+        : w,
+    ),
+    error: gpsError
+      ? `Recording paused because GPS failed: ${String(error)}. Check location permission and reception, then resume.`
+      : `Recording paused because it could not be saved: ${String(error)}. Check device storage before resuming.`,
+  }));
+}
 export function fromLocation(l: Location.LocationObject): TrackPoint {
   return {
     latitude: l.coords.latitude,
@@ -34,36 +73,43 @@ export function fromLocation(l: Location.LocationObject): TrackPoint {
     segment: 0,
   };
 }
-async function ingest(id: string, locations: Location.LocationObject[]) {
+async function ingest(
+  id: string,
+  locations: Location.LocationObject[],
+  token?: number,
+) {
   await mutateWorkout(id, (w) =>
-    locations
-      .sort((a, b) => a.timestamp - b.timestamp)
-      .reduce((current, l) => {
-        if (
-          useApp.getState().preferences.autoPause &&
-          l.coords.speed !== null &&
-          l.coords.speed >= 0 &&
-          (l.coords.accuracy ?? 100) <= 20
-        ) {
-          if (l.coords.speed < 0.5) {
-            stationarySince ??= l.timestamp;
+    token !== undefined && token !== generation
+      ? w
+      : locations
+          .sort((a, b) => a.timestamp - b.timestamp)
+          .reduce((current, l) => {
+            if (current.state === "finished") return current;
             if (
-              l.timestamp - stationarySince > 15000 &&
-              current.state === "recording"
+              useApp.getState().preferences.autoPause &&
+              l.coords.speed !== null &&
+              l.coords.speed >= 0 &&
+              (l.coords.accuracy ?? 100) <= 20
             ) {
-              autoPaused = true;
-              return pause(current, l.timestamp);
+              if (l.coords.speed < 0.5) {
+                stationarySince ??= l.timestamp;
+                if (
+                  l.timestamp - stationarySince > 15000 &&
+                  current.state === "recording"
+                ) {
+                  autoPaused = true;
+                  return pause(current, l.timestamp);
+                }
+              } else {
+                stationarySince = null;
+                if (autoPaused && current.state === "paused") {
+                  autoPaused = false;
+                  current = resume(current, l.timestamp);
+                }
+              }
             }
-          } else {
-            stationarySince = null;
-            if (autoPaused && current.state === "paused") {
-              autoPaused = false;
-              current = resume(current, l.timestamp);
-            }
-          }
-        }
-        return addPoint(current, fromLocation(l));
-      }, w),
+            return addPoint(current, fromLocation(l));
+          }, w),
   );
 }
 TaskManager.defineTask<{ locations: Location.LocationObject[] }>(
@@ -78,24 +124,39 @@ TaskManager.defineTask<{ locations: Location.LocationObject[] }>(
   },
 );
 export async function attachForeground(id: string) {
-  watcher?.remove();
+  detachForeground();
   foregroundId = id;
-  watcher = await Location.watchPositionAsync(
+  const token = generation;
+  const subscription = await Location.watchPositionAsync(
     {
       accuracy: Location.Accuracy.High,
       timeInterval: 3000,
       distanceInterval: 3,
     },
     (location) => {
-      void ingest(id, [location]).catch((e) =>
-        useApp.setState({
-          error: `Recording could not be saved: ${String(e)}`,
-        }),
-      );
+      if (token !== generation) return;
+      void ingest(id, [location], token).catch((e) => reportSaveFailure(id, e));
+    },
+    (reason) => {
+      if (token !== generation) return;
+      reportSaveFailure(id, reason, true);
+      void command(() =>
+        mutateWorkout(id, (w) =>
+          pause(
+            w,
+            Math.max(
+              w.resumedAt ?? w.startedAt,
+              w.points.at(-1)?.timestamp ?? w.startedAt,
+            ),
+          ),
+        ),
+      ).catch((e) => reportSaveFailure(id, e));
     },
   );
+  if (token !== generation) subscription.remove();
+  else watcher = subscription;
 }
-export async function startWorkout(sport: Sport, ownerId?: string) {
+async function start(sport: Sport, ownerId?: string) {
   if ((await readWorkouts()).some((w) => w.state !== "finished"))
     throw new Error("Resume or discard your unfinished workout first.");
   const permission = await Location.requestForegroundPermissionsAsync();
@@ -122,28 +183,63 @@ export async function startWorkout(sport: Sport, ownerId?: string) {
     rejected: 0,
     ownerId,
   };
-  await serial(() => writeWorkout(w));
+  await serial(async () => {
+    if ((await readWorkouts()).some((item) => item.state !== "finished"))
+      throw new Error("Resume or discard your unfinished workout first.");
+    await writeWorkout(w);
+  });
   await useApp.getState().refresh();
+  interruptedAt = null;
   try {
     await attachForeground(w.id);
   } catch (e) {
+    detachForeground();
     await mutateWorkout(w.id, (x) => pause(x));
     throw e;
   }
   return w;
 }
-export async function pauseWorkout(id: string) {
+async function pauseRecording(id: string) {
   autoPaused = false;
   stationarySince = null;
-  await mutateWorkout(id, (x) => pause(x));
+  await mutateWorkout(id, (x) => pause(x, interruptedAt ?? Date.now()));
 }
-export async function resumeWorkout(id: string) {
+async function resumeRecording(id: string) {
+  let existing = (await readWorkouts()).find((w) => w.id === id);
+  if (existing?.state === "recording" && foregroundId !== id)
+    existing = await mutateWorkout(id, (w) =>
+      pause(
+        w,
+        Math.max(
+          w.resumedAt ?? w.startedAt,
+          w.points.at(-1)?.timestamp ?? w.startedAt,
+        ),
+      ),
+    );
+  if (!existing || existing.state !== "paused")
+    throw new Error("Only a paused workout can be resumed.");
+  const permission = await Location.requestForegroundPermissionsAsync();
+  if (!permission.granted)
+    throw new Error(
+      "Location permission is needed. Enable it in your phone settings.",
+    );
+  if (!(await Location.hasServicesEnabledAsync()))
+    throw new Error("Turn on your phone's location services first.");
   autoPaused = false;
   stationarySince = null;
-  await attachForeground(id);
-  await mutateWorkout(id, (x) => resume(x));
+  try {
+    await attachForeground(id);
+    await mutateWorkout(id, (x) => resume(x));
+    interruptedAt = null;
+  } catch (error) {
+    detachForeground();
+    throw error;
+  }
 }
-export async function enableBackground(id: string) {
+async function background(id: string) {
+  const existing = (await readWorkouts()).find((w) => w.id === id);
+  if (!existing || existing.state === "finished")
+    throw new Error("No unfinished workout to record.");
   if (!(await TaskManager.isAvailableAsync()))
     throw new Error(
       "Background recording needs an installed development build.",
@@ -172,31 +268,32 @@ export async function enableBackground(id: string) {
   }
 }
 async function stop() {
-  watcher?.remove();
-  watcher = null;
-  foregroundId = null;
+  detachForeground();
   autoPaused = false;
   stationarySince = null;
   if (await Location.hasStartedLocationUpdatesAsync(BACKGROUND_TASK))
     await Location.stopLocationUpdatesAsync(BACKGROUND_TASK);
   await setValue("backgroundWorkout", null);
 }
-export async function finishWorkout(id: string) {
-  await stop();
+async function finish(id: string) {
   await mutateWorkout(id, (w) => ({
-    ...pause(w),
+    ...(w.state === "finished" ? w : pause(w, interruptedAt ?? Date.now())),
     state: "finished",
-    endedAt: Date.now(),
+    endedAt: w.endedAt ?? Date.now(),
   }));
+  await stop();
 }
-export async function discardWorkout(id: string) {
+async function discard(id: string) {
+  const existing = (await readWorkouts()).find((w) => w.id === id);
+  if (existing?.state === "finished")
+    throw new Error("Use Activities to delete a completed workout.");
   await stop();
   await deleteWorkout(id);
   await useApp.getState().refresh();
 }
-export async function recoverRecording() {
+async function recover() {
   const active = (await readWorkouts()).find((w) => w.state !== "finished");
-  if (!active) return;
+  if (!active || foregroundId === active.id) return;
   if (await Location.hasStartedLocationUpdatesAsync(BACKGROUND_TASK)) {
     await attachForeground(active.id);
     return;
@@ -212,13 +309,25 @@ export async function recoverRecording() {
     ),
   );
 }
+export const startWorkout = (sport: Sport, ownerId?: string) =>
+  command(() => start(sport, ownerId));
+export const pauseWorkout = (id: string) => command(() => pauseRecording(id));
+export const resumeWorkout = (id: string) => command(() => resumeRecording(id));
+export const finishWorkout = (id: string) => command(() => finish(id));
+export const discardWorkout = (id: string) => command(() => discard(id));
+export const enableBackground = (id: string) => command(() => background(id));
+export const recoverRecording = () => command(recover);
 let lifecycleInstalled = false;
 export function installRecorderLifecycle() {
   if (lifecycleInstalled) return;
   lifecycleInstalled = true;
   AppState.addEventListener("change", (state) => {
     if (state === "active") {
-      void useApp.getState().refresh();
+      void useApp
+        .getState()
+        .refresh()
+        .then(recoverRecording)
+        .catch((e) => useApp.setState({ error: String(e) }));
       return;
     }
     if (state !== "background") return;
@@ -226,9 +335,7 @@ export function installRecorderLifecycle() {
       void (async () => {
         if (!(await Location.hasStartedLocationUpdatesAsync(BACKGROUND_TASK))) {
           const id = foregroundId;
-          watcher?.remove();
-          watcher = null;
-          foregroundId = null;
+          detachForeground();
           if (id) await pauseWorkout(id);
         }
       })().catch((e) => useApp.setState({ error: String(e) }));

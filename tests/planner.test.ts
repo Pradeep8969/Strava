@@ -8,6 +8,7 @@ import {
   routingUnavailable,
 } from "../features/routes/planner";
 import { loadPlans, savePlan, deletePlan } from "../services/planned-routes";
+import * as database from "../services/database";
 const storage = vi.hoisted(() => new Map<string, unknown>());
 vi.mock("../services/database", () => ({
   getValue: async (key: string) => storage.get(key) ?? null,
@@ -76,4 +77,29 @@ it("labels approximate distances and unavailable road routing explicitly", () =>
   expect(planningLabel).toContain("Approximate straight-line");
   expect(routingUnavailable).toContain("Road-following unavailable");
   expect(routingUnavailable).toContain("safety are not checked");
+});
+it("keeps original legacy metadata when adding or deleting a different plan", async () => {
+  const legacy = {
+    id: "legacy",
+    title: "Original",
+    points: points(),
+    custom: { keep: true },
+  };
+  storage.set("routes", [legacy]);
+  await savePlan(createPlan("New", points(), "new", null));
+  expect((storage.get("routes") as unknown[])[0]).toEqual(legacy);
+  await deletePlan("new");
+  expect(storage.get("routes")).toEqual([legacy]);
+});
+it("reports storage failure without claiming the route was saved or losing old records", async () => {
+  const original = createPlan("Original", points(), "original", null);
+  storage.set("routes", [original]);
+  const write = vi
+    .spyOn(database, "setValue")
+    .mockRejectedValueOnce(new Error("Storage full"));
+  await expect(
+    savePlan(createPlan("New", points(), "new", null)),
+  ).rejects.toThrow("Storage full");
+  expect(storage.get("routes")).toEqual([original]);
+  write.mockRestore();
 });

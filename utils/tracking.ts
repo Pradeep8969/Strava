@@ -36,6 +36,8 @@ export function addPoint(w: Workout, point: TrackPoint): Workout {
   if (
     !validPoint(p) ||
     p.timestamp < w.startedAt ||
+    (w.resumedAt !== null && p.timestamp < w.resumedAt) ||
+    p.timestamp > Date.now() + 1000 ||
     (last &&
       (dt <= 0 ||
         (last.segment === p.segment &&

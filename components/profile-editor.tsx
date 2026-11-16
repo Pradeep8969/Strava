@@ -165,7 +165,11 @@ export function ProfileEditor({
               source={{ uri: preview }}
               accessibilityLabel="Profile photo preview"
               style={{ width: 88, height: 88, borderRadius: 44 }}
-              onError={() => setFailed(preview)}
+              onError={() => {
+                setFailed(preview);
+                if (!state.photo && preview === identity.avatarUrl)
+                  identity.onAvatarError();
+              }}
             />
           ) : (
             <Ionicons name="person-circle-outline" size={88} color={c.forest} />

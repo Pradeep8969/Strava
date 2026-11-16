@@ -1,6 +1,10 @@
 /** Pinned browser-only MapLibre loader. No native imports or network activity until mounted. */
 export interface BrowserMap {
   on(
+    event: "movestart",
+    callback: (event: { originalEvent?: unknown }) => void,
+  ): void;
+  on(
     event: "click",
     callback: (event: { lngLat: { lat: number; lng: number } }) => void,
   ): void;
@@ -9,8 +13,16 @@ export interface BrowserMap {
   resize(): void;
   flyTo(options: object): void;
   fitBounds(bounds: number[][], options: object): void;
-  setStyle(style: string): void;
+  setStyle(
+    style: string,
+    options?: {
+      transformStyle?: (previous: unknown, next: unknown) => unknown;
+    },
+  ): void;
   isStyleLoaded(): boolean;
+  getLayer(id: string): unknown;
+  setPaintProperty(id: string, name: string, value: unknown): void;
+  stop?(): void;
   addControl(control: unknown, position?: string): void;
   getCanvas(): HTMLCanvasElement;
   getSource(id: string): { setData(data: unknown): void } | undefined;

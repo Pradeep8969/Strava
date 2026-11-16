@@ -4,12 +4,18 @@ import { routePreview } from "../features/routes/preview";
 import type { TrackPoint } from "../types/activity";
 import { useColors } from "./ui";
 
-export function RoutePreview({ points }: { points: TrackPoint[] }) {
+export function RoutePreview({
+  points,
+  kind = "recording",
+}: {
+  points: TrackPoint[];
+  kind?: "plan" | "recording";
+}) {
   const c = useColors();
   const [width, setWidth] = useState(0);
   const groups = useMemo(
-    () => routePreview(points, width, 100),
-    [points, width],
+    () => routePreview(points, width, 100, kind),
+    [points, width, kind],
   );
   return (
     <View
@@ -22,7 +28,11 @@ export function RoutePreview({ points }: { points: TrackPoint[] }) {
       <View
         accessible
         accessibilityRole="image"
-        accessibilityLabel="Recorded route sketch, without a base map"
+        accessibilityLabel={
+          kind === "plan"
+            ? "Straight-line waypoint sketch, without a base map"
+            : "Recorded route sketch, without a base map"
+        }
         onLayout={(event) => setWidth(event.nativeEvent.layout.width)}
         style={{ height: 100 }}
       >
@@ -58,7 +68,9 @@ export function RoutePreview({ points }: { points: TrackPoint[] }) {
           paddingBottom: 9,
         }}
       >
-        RECORDED ROUTE · NO BASE MAP
+        {kind === "plan"
+          ? "WAYPOINT PLAN · STRAIGHT LINES"
+          : "RECORDED ROUTE · NO BASE MAP"}
       </Text>
     </View>
   );

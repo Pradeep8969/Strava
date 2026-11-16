@@ -3,6 +3,7 @@ import {
   mapConfiguration,
   mapSegments,
   routeFeatures,
+  routeDistance,
   type MapRoute,
 } from "../features/discovery/map-data";
 import type { TrackPoint } from "../types/activity";
@@ -68,5 +69,26 @@ describe("geographic map data", () => {
         points: [point(85), point(200), point(85.1)],
       }),
     ).toEqual([]);
+  });
+  it("highlights the selected route and calculates distance without bridging gaps", () => {
+    const route: MapRoute = {
+      id: "track",
+      title: "Track",
+      kind: "recording",
+      points: [
+        point(85, 1000),
+        point(85.001, 2000),
+        point(86, 100000),
+        point(86.001, 101000),
+      ],
+    };
+    const data = routeFeatures([route], "track");
+    expect(data.features).toHaveLength(2);
+    expect(data.features.every((feature) => feature.properties.selected)).toBe(
+      true,
+    );
+    expect(routeDistance(route)).toBeGreaterThan(190);
+    expect(routeDistance(route)).toBeLessThan(200);
+    expect(routeDistance({ ...route, points: [] })).toBe(0);
   });
 });

@@ -1,5 +1,5 @@
 import type { TrackPoint } from "../../types/activity";
-import { trackSegments } from "../../utils/tracking";
+import { distance, trackSegments } from "../../utils/tracking";
 import type { Area, SavedRoute } from "./catalog";
 
 export type MapRoute = SavedRoute & { kind: "plan" | "recording" };
@@ -12,6 +12,10 @@ export type DiscoveryMapProps = {
   onSelect?: (id: string) => void;
   onWaypoint?: (coordinate: { latitude: number; longitude: number }) => void;
   fitRequest?: number;
+  /** Follow only accepted recording points, never a separate browser GPS request. */
+  tracking?: boolean;
+  variant?: "explore" | "record" | "planner" | "activity";
+  tone?: "default" | "dark";
 };
 export const validCoordinate = (p: { latitude: number; longitude: number }) =>
   Number.isFinite(p.latitude) &&
@@ -36,13 +40,29 @@ export function mapSegments(route: MapRoute): TrackPoint[][] {
     )
     .filter((chunk) => chunk.length > 1);
 }
-export function routeFeatures(routes: MapRoute[]) {
+export function routeDistance(route: MapRoute) {
+  return mapSegments(route).reduce(
+    (sum, group) =>
+      sum +
+      group.reduce(
+        (meters, point, index) =>
+          meters + (index ? distance(group[index - 1], point) : 0),
+        0,
+      ),
+    0,
+  );
+}
+export function routeFeatures(routes: MapRoute[], selectedId?: string | null) {
   return {
     type: "FeatureCollection" as const,
     features: routes.flatMap((route) =>
       mapSegments(route).map((segment) => ({
         type: "Feature" as const,
-        properties: { id: route.id, kind: route.kind },
+        properties: {
+          id: route.id,
+          kind: route.kind,
+          selected: route.id === selectedId,
+        },
         geometry: {
           type: "LineString" as const,
           coordinates: segment.map((p) => [p.longitude, p.latitude]),

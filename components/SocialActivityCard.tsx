@@ -73,7 +73,10 @@ export default function SocialActivityCard({
               source={{ uri: avatar.data }}
               accessibilityLabel={`${athleteName} profile photo`}
               style={{ width: 41, height: 41 }}
-              onError={() => setFailedImage(avatar.data!)}
+              onError={() => {
+                setFailedImage(avatar.data!);
+                identity.onAvatarError();
+              }}
             />
           ) : (
             <Text style={{ color: c.forest, fontSize: 14, fontWeight: "700" }}>

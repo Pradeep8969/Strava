@@ -1,0 +1,29 @@
+import { defineConfig } from "@playwright/test";
+
+export default defineConfig({
+  testDir: "./tests/browser",
+  testMatch: [
+    "route-cloud-compatibility.spec.ts",
+    "route-cloud-atomic.spec.ts",
+  ],
+  timeout: 90000,
+  workers: 1,
+  reporter: "list",
+  use: {
+    baseURL: process.env.PREVIEW_URL ?? "http://127.0.0.1:4173",
+    viewport: { width: 412, height: 915 },
+    trace: "retain-on-failure",
+  },
+  projects: [
+    { name: "chromium", use: { browserName: "chromium" } },
+    { name: "chrome", use: { browserName: "chromium", channel: "chrome" } },
+    { name: "edge", use: { browserName: "chromium", channel: "msedge" } },
+    { name: "firefox", use: { browserName: "firefox" } },
+    { name: "webkit", use: { browserName: "webkit" } },
+  ],
+  webServer: {
+    command: "node scripts/preview-server.mjs",
+    url: "http://127.0.0.1:4173",
+    reuseExistingServer: false,
+  },
+});

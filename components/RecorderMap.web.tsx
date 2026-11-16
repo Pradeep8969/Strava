@@ -1,16 +1,18 @@
-import { useMemo } from "react";
-import { View } from "react-native";
+import { memo, useMemo } from "react";
+import { Text, View, useWindowDimensions } from "react-native";
 import DiscoveryMap from "./DiscoveryMap";
-import { RoutePreview } from "./RoutePreview";
 import type { TrackPoint } from "../types/activity";
 import type { MapRoute } from "../features/discovery/map-data";
+import { useGpsAcquisition } from "../features/recording/acquisition";
 
-export default function RecorderMap({
+export default memo(function RecorderMap({
   points,
 }: {
   points: TrackPoint[];
   current?: boolean;
 }) {
+  const acquisition = useGpsAcquisition((state) => state.state);
+  const width = useWindowDimensions().width;
   const routes = useMemo<MapRoute[]>(
     () =>
       points.length
@@ -35,11 +37,26 @@ export default function RecorderMap({
       }}
     >
       <DiscoveryMap
-        height={300}
+        height={width >= 1100 ? 430 : width >= 768 ? 380 : 320}
         routes={routes}
         selectedId="current-recording"
+        tracking
+        tone="dark"
+        variant="record"
       />
-      {points.length > 1 ? <RoutePreview points={points} /> : null}
+      {!points.length &&
+      (acquisition === "acquiring" || acquisition === "waiting") ? (
+        <Text
+          style={{
+            color: "#CED8DD",
+            padding: 12,
+            fontSize: 13,
+            lineHeight: 20,
+          }}
+        >
+          Waiting for accurate GPS — recording requires 35 m or better.
+        </Text>
+      ) : null}
     </View>
   );
-}
+});

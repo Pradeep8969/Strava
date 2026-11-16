@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Workout } from "../types/activity";
 import { emptyEventDraft } from "../features/organizer/drafts";
+import { createPlan, waypoint } from "../features/routes/planner";
 const context = vi.hoisted(() => ({
   path: "",
   connections: [] as { close: () => void }[],
@@ -13,7 +14,7 @@ vi.mock("expo-sqlite", () => ({
   openDatabaseAsync: async () => {
     const db = new DatabaseSync(context.path);
     context.connections.push(db);
-    return {
+    const connection = {
       execAsync: async (sql: string) => db.exec(sql),
       runAsync: async (sql: string, ...params: (string | number)[]) =>
         db.prepare(sql).run(...params),
@@ -21,7 +22,28 @@ vi.mock("expo-sqlite", () => ({
         db.prepare(sql).all(...params),
       getFirstAsync: async (sql: string, ...params: string[]) =>
         db.prepare(sql).get(...params),
+      withExclusiveTransactionAsync: async (
+        action: (tx: any) => Promise<void>,
+      ) => {
+        const isolated = new DatabaseSync(context.path);
+        try {
+          isolated.exec("BEGIN IMMEDIATE");
+          await action({
+            runAsync: async (sql: string, ...params: (string | number)[]) =>
+              isolated.prepare(sql).run(...params),
+            getFirstAsync: async (sql: string, ...params: string[]) =>
+              isolated.prepare(sql).get(...params),
+          });
+          isolated.exec("COMMIT");
+        } catch (error) {
+          if (isolated.isTransaction) isolated.exec("ROLLBACK");
+          throw error;
+        } finally {
+          isolated.close();
+        }
+      },
     };
+    return connection;
   },
 }));
 let directory = "";
@@ -30,6 +52,69 @@ afterEach(() => {
   context.connections = [];
   if (directory) rmSync(directory, { recursive: true, force: true });
   vi.resetModules();
+});
+it("atomically updates native account caches and rolls back failed mutations without touching legacy keys", async () => {
+  directory = mkdtempSync(join(tmpdir(), "stravakinda-atomic-test-"));
+  context.path = join(directory, "atomic.db");
+  const db = await import("../services/database");
+  await db.setValue("routes", [{ id: "legacy", unknown: "preserve" }]);
+  const key = "account-routes:v1:fixture";
+  await Promise.all([
+    db.updateValue<Record<string, string>>(key, (value) => ({
+      ...value,
+      a: "pending",
+    })),
+    db.updateValue<Record<string, string>>(key, (value) => ({
+      ...value,
+      b: "pending",
+    })),
+  ]);
+  expect(await db.getValue(key)).toEqual({ a: "pending", b: "pending" });
+  const blocker = new DatabaseSync(context.path);
+  blocker.exec("BEGIN IMMEDIATE");
+  try {
+    await expect(
+      db.updateValue(key, () => ({ lost: "must not commit" })),
+    ).rejects.toThrow("route was not saved");
+  } finally {
+    blocker.exec("ROLLBACK");
+    blocker.close();
+  }
+  expect(await db.getValue(key)).toEqual({ a: "pending", b: "pending" });
+  await expect(
+    db.updateValue(key, () => {
+      throw new Error("Fixture callback failed");
+    }),
+  ).rejects.toThrow("Fixture callback failed");
+  expect(await db.getValue(key)).toEqual({ a: "pending", b: "pending" });
+  expect(await db.getValue("routes")).toEqual([
+    { id: "legacy", unknown: "preserve" },
+  ]);
+  vi.resetModules();
+  expect(await (await import("../services/database")).getValue(key)).toEqual({
+    a: "pending",
+    b: "pending",
+  });
+});
+it("reopens native planned routes from disk without changing legacy metadata", async () => {
+  directory = mkdtempSync(join(tmpdir(), "stravakinda-test-"));
+  context.path = join(directory, "routes.db");
+  let plans = await import("../services/planned-routes");
+  const plan = createPlan(
+    "Native fixture",
+    [
+      waypoint({ latitude: 0, longitude: 0 }),
+      waypoint({ latitude: 0, longitude: 1 }),
+    ],
+    "native",
+    null,
+  );
+  await plans.savePlan(plan);
+  for (const db of context.connections) db.close();
+  context.connections = [];
+  vi.resetModules();
+  plans = await import("../services/planned-routes");
+  expect(await plans.loadPlans()).toEqual([plan]);
 });
 it("persists workouts and preferences across connection restarts, then deletes", async () => {
   directory = mkdtempSync(join(tmpdir(), "stravakinda-test-"));

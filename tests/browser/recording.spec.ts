@@ -1,9 +1,13 @@
 import { expect, test, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 
-async function gps(page: Page, failure = 0) {
+async function gps(
+  page: Page,
+  failure = 0,
+  firstFix: { accuracy?: number; ageMs?: number } = {},
+) {
   await page.addInitScript(
-    ({ failure }) => {
+    ({ failure, firstFix }) => {
       let success: PositionCallback | undefined;
       let error: PositionErrorCallback | undefined;
       let requests = 0;
@@ -30,9 +34,18 @@ async function gps(page: Page, failure = 0) {
           ) => {
             requests++;
             queueMicrotask(() =>
-              failure
+              failure && requests === 1
                 ? fail({ code: failure } as GeolocationPositionError)
-                : ok(position()),
+                : ok(
+                    requests === 1
+                      ? {
+                          ...position(27.7, {
+                            accuracy: firstFix.accuracy ?? 5,
+                          }),
+                          timestamp: Date.now() - (firstFix.ageMs ?? 0),
+                        }
+                      : position(),
+                  ),
             );
           },
           watchPosition: (
@@ -56,7 +69,7 @@ async function gps(page: Page, failure = 0) {
         fail: (code: number) => error?.({ code } as GeolocationPositionError),
       };
     },
-    { failure },
+    { failure, firstFix },
   );
 }
 async function stored(page: Page) {
@@ -156,6 +169,81 @@ for (const width of [390, 1440]) {
     await page.getByRole("tab", { name: "Profile", exact: false }).click();
     await expect(page.getByTestId("training-stat-2")).toHaveText("1");
     await expect(page.getByTestId("training-stat-0")).toHaveText(measured!);
+    await page.getByRole("tab", { name: "Activities", exact: false }).click();
+    // Reopen the persisted library without the Home tab's mounted duplicate card.
+    await expect(page).toHaveURL(/\/activities$/);
+    await page.reload();
+    const activity = page.getByRole("button", {
+      name: "View Running workout",
+      exact: true,
+    });
+    await expect(activity).toHaveCount(1);
+    await activity.click();
+    await expect(page).toHaveURL(/\/activity\//);
+    await expect(
+      page.getByRole("heading", { name: "Running workout", exact: true }),
+    ).toBeVisible();
+    expect(await stored(page)).toHaveLength(1);
+  });
+}
+for (const sample of [
+  { accuracy: 120, ageMs: 0, detail: "approximately 120 m" },
+  { accuracy: 5, ageMs: 20000, detail: "stale (20 seconds old)" },
+]) {
+  test(`explains rejected acquisition (${sample.detail}) and retries without reload`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await gps(page, 0, sample);
+    await page.goto("/record");
+    await page
+      .getByRole("button", { name: "Start running activity", exact: true })
+      .click();
+    await expect(
+      page.getByText("Waiting for accurate GPS", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByText(
+        new RegExp(sample.detail.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+      ),
+    ).toBeVisible();
+    await expect(page.getByRole("alert")).toHaveCount(0);
+    expect(await stored(page)).toEqual([]);
+    await expect(page.getByTestId("record-active-time")).toHaveText("00:00:00");
+    await expect(page.getByRole("tab")).toHaveCount(6);
+    await expect(
+      page.getByRole("region", { name: /Interactive map/ }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Retry GPS", exact: true }).click();
+    await expect(
+      page.getByRole("button", { name: "Pause activity", exact: true }),
+    ).toBeEnabled();
+    await expect(
+      page.getByRole("button", { name: "Retry GPS", exact: true }),
+    ).toHaveCount(0);
+    expect((await stored(page))[0].points).toHaveLength(1);
+  });
+}
+for (const [code, detail] of [
+  [1, "permission was denied"],
+  [2, "location is unavailable"],
+  [3, "GPS timed out"],
+] as const) {
+  test(`browser acquisition error ${code} explains the failure and permits retry`, async ({
+    page,
+  }) => {
+    await gps(page, code);
+    await page.goto("/record");
+    await page
+      .getByRole("button", { name: "Start running activity", exact: true })
+      .click();
+    await expect(page.getByRole("alert")).toContainText(detail);
+    expect(await stored(page)).toEqual([]);
+    await page.getByRole("button", { name: "Retry GPS", exact: true }).click();
+    await expect(
+      page.getByRole("button", { name: "Pause activity", exact: true }),
+    ).toBeEnabled();
+    await expect(page.getByRole("alert")).toHaveCount(0);
     expect(await stored(page)).toHaveLength(1);
   });
 }
@@ -226,6 +314,30 @@ test("GPS failure pauses, reload recovers safely, and web Discard actually delet
     page.getByRole("button", { name: "Start running activity", exact: true }),
   ).toBeEnabled();
   expect(await stored(page)).toEqual([]);
+});
+test("in-app navigation preserves recording and cancelled discard keeps it", async ({
+  page,
+}) => {
+  await gps(page);
+  await page.goto("/record");
+  await page
+    .getByRole("button", { name: "Start running activity", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Pause activity", exact: true }),
+  ).toBeEnabled();
+  const id = (await stored(page))[0].id;
+  await page.getByRole("button", { name: "Back to Home", exact: true }).click();
+  await page.getByRole("tab", { name: "Record", exact: false }).click();
+  await expect(
+    page.getByRole("button", { name: "Pause activity", exact: true }),
+  ).toBeEnabled();
+  page.once("dialog", (dialog) => dialog.dismiss());
+  await page
+    .getByRole("button", { name: "Discard workout", exact: true })
+    .click();
+  expect((await stored(page)).map((w) => w.id)).toEqual([id]);
+  expect((await stored(page))[0].state).toBe("recording");
 });
 
 test("interactive recording map receives measured GPS geometry when maps are configured", async ({

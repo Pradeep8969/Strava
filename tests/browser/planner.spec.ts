@@ -99,6 +99,10 @@ for (const width of [390, 1440]) {
     await page.getByRole("button", { name: "Open", exact: true }).click();
     await expect(page.getByLabel("Waypoint 2", { exact: true })).toBeVisible();
     await expect(page.getByText(/Road-following unavailable/)).toBeVisible();
+    page.once("dialog", (dialog) => dialog.dismiss());
+    await page.getByRole("button", { name: "Clear", exact: true }).click();
+    await expect(page.getByLabel("Waypoint 2", { exact: true })).toBeVisible();
+    page.once("dialog", (dialog) => dialog.accept());
     await page.getByRole("button", { name: "Clear", exact: true }).click();
     await expect(page.getByLabel("Waypoint 1", { exact: true })).toHaveCount(0);
     await page.evaluate(() =>

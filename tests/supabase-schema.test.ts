@@ -71,8 +71,8 @@ for (const match of sql.matchAll(
 
 describe("Supabase migration/application contract (static, not a PostgreSQL execution test)", () => {
   it("has one definition per table and dependencies exist in migration order", () => {
-    expect(definitions).toHaveLength(26);
-    expect(tables.size).toBe(26);
+    expect(definitions).toHaveLength(27);
+    expect(tables.size).toBe(27);
     const seen = new Set<string>();
     for (const definition of definitions) {
       for (const reference of definition[2].matchAll(

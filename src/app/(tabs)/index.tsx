@@ -108,7 +108,10 @@ export default function Home() {
               source={{ uri: identity.avatarUrl }}
               accessibilityLabel="Your account picture"
               style={{ width: 36, height: 36, borderRadius: 18 }}
-              onError={() => setFailedAvatar(identity.avatarUrl!)}
+              onError={() => {
+                setFailedAvatar(identity.avatarUrl!);
+                identity.onAvatarError();
+              }}
             />
           </Pressable>
         ) : (

@@ -1,0 +1,35 @@
+begin;
+create extension if not exists pgtap with schema extensions;
+select plan(17);
+insert into auth.users(id,email) values
+ ('00000000-0000-4000-8000-000000000011','routes-owner@example.test'),
+ ('00000000-0000-4000-8000-000000000012','routes-other@example.test');
+create temporary table route_fixture(p jsonb);
+insert into route_fixture values ('{"id":"10000000-0000-4000-8000-000000000011","title":"Private fixture","kind":"plan","planningMode":"straight-line","createdAt":null,"distanceMeters":1,"points":[{"longitude":85.123456789,"latitude":27.123456789},{"longitude":85.2,"latitude":27.2}],"geometry":{"type":"LineString","coordinates":[[85.123456789,27.123456789],[85.2,27.2]]}}');
+grant select on route_fixture to authenticated,anon;
+set local role authenticated;
+select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000000011',true);
+select is((select count(*)::integer from public.write_planned_route('10000000-0000-4000-8000-000000000011',0,'20000000-0000-4000-8000-000000000011',(select p from route_fixture))),1,'Owner creates');
+select is((select count(*)::integer from public.planned_routes),1,'Owner reads');
+select is((select plan->'geometry'->'coordinates'->0->>0 from public.planned_routes),'85.123456789','Coordinate precision preserved');
+select is((select revision::integer from public.write_planned_route('10000000-0000-4000-8000-000000000011',0,'20000000-0000-4000-8000-000000000011',(select p from route_fixture))),1,'Retry is idempotent');
+select is((select revision::integer from public.write_planned_route('10000000-0000-4000-8000-000000000011',1,'20000000-0000-4000-8000-000000000012',(select p from route_fixture))),2,'Owner updates');
+select is((select count(*)::integer from public.write_planned_route('10000000-0000-4000-8000-000000000011',1,'20000000-0000-4000-8000-000000000013',(select p from route_fixture))),0,'Stale edit rejected');
+select throws_ok($$update public.planned_routes set user_id='00000000-0000-4000-8000-000000000012'$$,'42501',null,'Ownership cannot change');
+select throws_ok($$delete from public.planned_routes$$,'42501',null,'Hard delete cannot bypass tombstones');
+select throws_ok($$select * from public.write_planned_route('10000000-0000-4000-8000-000000000011',2,'20000000-0000-4000-8000-000000000014',(select jsonb_set(p,'{title}','null') from route_fixture))$$,'23514',null,'Null required field rejected');
+select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000000012',true);
+select is((select count(*)::integer from public.planned_routes),0,'Other athlete sees no geometry');
+select is((select count(*)::integer from public.write_planned_route('10000000-0000-4000-8000-000000000011',2,'20000000-0000-4000-8000-000000000015',(select p from route_fixture))),0,'Other athlete cannot update or claim ID');
+select is((select count(*)::integer from public.write_planned_route('10000000-0000-4000-8000-000000000011',2,'20000000-0000-4000-8000-000000000016',(select p from route_fixture),true)),0,'Other athlete cannot delete');
+select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000000011',true);
+select ok((select deleted_at is not null from public.write_planned_route('10000000-0000-4000-8000-000000000011',2,'20000000-0000-4000-8000-000000000017',(select p from route_fixture),true)),'Owner soft deletes');
+select is((select count(*)::integer from public.write_planned_route('10000000-0000-4000-8000-000000000011',3,'20000000-0000-4000-8000-000000000018',(select p from route_fixture))),0,'Cannot resurrect deleted route');
+reset role;
+set local role anon;
+select throws_ok($$select * from public.planned_routes$$,'42501',null,'Anonymous cannot read geometry');
+select throws_ok($$select * from public.write_planned_route('10000000-0000-4000-8000-000000000011',0,'20000000-0000-4000-8000-000000000019',(select p from route_fixture))$$,'42501',null,'Anonymous cannot mutate');
+reset role;
+select ok((select relrowsecurity from pg_class where oid='public.planned_routes'::regclass),'RLS enabled');
+select * from finish();
+rollback;

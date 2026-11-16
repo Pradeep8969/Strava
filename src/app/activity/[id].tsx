@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Alert, Platform, View } from "react-native";
+import { Alert, Platform, View, useWindowDimensions } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import {
   Screen,
@@ -19,7 +19,7 @@ import {
   TrainingPanel,
   sportNames,
 } from "../../../components/athlete-training";
-import { RoutePreview } from "../../../components/RoutePreview";
+import { activityMapPoints } from "../../../features/routes/activity-map";
 import { waypointElevation } from "../../../features/discovery/catalog";
 import TrackMap from "../../../components/TrackMap";
 import { mutateWorkout, useApp } from "../../../store/app";
@@ -54,6 +54,7 @@ export default function Detail() {
   return <DetailContent key={id} id={id} />;
 }
 function DetailContent({ id }: { id: string }) {
+  const wide = useWindowDimensions().width >= 1100;
   const { workouts, preferences: p } = useApp(),
     w = workouts.find((x) => x.id === id),
     action = useAction(),
@@ -94,56 +95,76 @@ function DetailContent({ id }: { id: string }) {
         title={w.title}
         detail={`${sportNames[w.sport]} · ${new Date(w.startedAt).toLocaleDateString()} · ${w.visibility}`}
       />
-      {Platform.OS === "web" ? (
-        w.points.length > 1 ? (
-          <RoutePreview points={w.points} />
-        ) : (
-          <TrainingPanel>
-            <Text style={{ color: c.muted, fontSize: 12 }}>
-              No recorded route for this activity.
-            </Text>
-          </TrainingPanel>
-        )
-      ) : (
-        <TrackMap points={w.points} cursor={w.points[replay]} />
-      )}
-      <Button
-        secondary
-        title={playing ? "Stop replay" : "Replay route"}
-        disabled={!w.points.length || Platform.OS === "web"}
-        onPress={() => {
-          setReplay(0);
-          setPlaying(!playing);
+      <View
+        style={{
+          flexDirection: wide ? "row" : "column",
+          gap: 20,
+          alignItems: "flex-start",
         }}
-      />
-      <View accessibilityLabel="Recorded activity statistics">
-        <TrainingPanel>
-          <Row>
-            <Metric label={p.units} value={length(s.meters, p.units)} />
-            <Metric label={`Pace /${p.units}`} value={pace(s.pace, p.units)} />
-          </Row>
-          <Row>
-            <Metric label="Moving time" value={duration(s.movingMs)} />
-            <Metric label="Elapsed" value={duration(s.elapsedMs)} />
-          </Row>
-          <Copy muted>
-            Elevation gain:{" "}
-            {waypointElevation(w.points) !== null
-              ? `${s.elevation.toFixed(0)} m`
-              : "Unavailable"}{" "}
-            · reliable altitude only
-          </Copy>
-          <Copy muted>
-            Average speed:{" "}
-            {s.movingMs > 0
-              ? (
-                  ((s.meters / s.movingMs) * 3600) /
-                  (p.units === "mi" ? 1.609344 : 1)
-                ).toFixed(1)
-              : "—"}{" "}
-            {p.units}/h
-          </Copy>
-        </TrainingPanel>
+      >
+        <View
+          style={{
+            flex: wide ? 1.6 : undefined,
+            width: wide ? undefined : "100%",
+            minWidth: 0,
+            gap: 12,
+          }}
+        >
+          <TrackMap
+            points={activityMapPoints(w, session?.user.id)}
+            cursor={w.points[replay]}
+          />
+          {Platform.OS !== "web" ? (
+            <Button
+              secondary
+              title={playing ? "Stop replay" : "Replay route"}
+              disabled={!w.points.length}
+              onPress={() => {
+                setReplay(0);
+                setPlaying(!playing);
+              }}
+            />
+          ) : null}
+        </View>
+        <View
+          style={{
+            flex: wide ? 0.8 : undefined,
+            width: wide ? undefined : "100%",
+            minWidth: 0,
+          }}
+          accessibilityLabel="Recorded activity statistics"
+        >
+          <TrainingPanel>
+            <Row>
+              <Metric label={p.units} value={length(s.meters, p.units)} />
+              <Metric
+                label={`Pace /${p.units}`}
+                value={pace(s.pace, p.units)}
+              />
+            </Row>
+            <Row>
+              <Metric label="Moving time" value={duration(s.movingMs)} />
+              <Metric label="Elapsed" value={duration(s.elapsedMs)} />
+            </Row>
+            <Copy muted>
+              Elevation gain:{" "}
+              {waypointElevation(w.points) !== null
+                ? `${s.elevation.toFixed(0)} m`
+                : "Unavailable"}{" "}
+              · reliable altitude only
+            </Copy>
+            <Copy muted>
+              Average speed:{" "}
+              {s.movingMs > 0
+                ? (
+                    ((s.meters / s.movingMs) * 3600) /
+                    (p.units === "mi" ? 1.609344 : 1)
+                  ).toFixed(1)
+                : "—"}{" "}
+              {p.units}/h
+            </Copy>
+          </TrainingPanel>
+        </View>
       </View>
       <TrainingPanel>
         <DiscoveryTitle title="Kilometer splits" />

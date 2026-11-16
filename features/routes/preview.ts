@@ -1,17 +1,19 @@
 import type { TrackPoint } from "../../types/activity";
-import { trackSegments } from "../../utils/tracking";
+import { mapSegments, type MapRoute } from "../discovery/map-data";
 
 /** Bounded geometry for a small route sketch; gaps and pauses remain separate. */
 export function routePreview(
   points: TrackPoint[],
   width: number,
   height: number,
+  kind: MapRoute["kind"] = "recording",
 ) {
-  const groups = trackSegments(
-    points.filter(
-      (p) => Number.isFinite(p.latitude) && Number.isFinite(p.longitude),
-    ),
-  );
+  const groups = mapSegments({
+    id: "preview",
+    title: "Route preview",
+    points,
+    kind,
+  });
   const stride = Math.max(1, Math.ceil(points.length / 120));
   const sampled = groups
     .map((group) =>

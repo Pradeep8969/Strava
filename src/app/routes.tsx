@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
+import { Alert, Platform, View, useWindowDimensions } from "react-native";
 import {
   Screen,
   Heading,
@@ -10,32 +11,40 @@ import {
 } from "../../components/ui";
 import PlannerMap from "../../components/PlannerMap";
 import type { TrackPoint } from "../../types/activity";
-import { loadPlans, savePlan, deletePlan } from "../../services/planned-routes";
+import { savePlan, deletePlan } from "../../services/planned-routes";
 import {
   createPlan,
   waypoint,
   planDistance,
   planningLabel,
   routingUnavailable,
-  type PlannedRoute,
 } from "../../features/routes/planner";
 import { useAction } from "../../hooks/useAction";
 
+import { randomUUID } from "expo-crypto";
+import { useSession } from "../../hooks/useSession";
+import { useRouteLibrary, routeStatus } from "../../hooks/useRouteLibrary";
+import { retryRouteSync, useRouteSyncStatus } from "../../hooks/useRouteSync";
+import {
+  queueAccountRoute,
+  acceptCloudVersion,
+  notifyRouteLibrary,
+} from "../../services/route-cloud";
 export default function Routes() {
-  const [saved, setSaved] = useState<PlannedRoute[]>([]),
-    [fitRequest, setFitRequest] = useState(0),
-    [loaded, setLoaded] = useState(false),
+  const user = useSession()?.user.id;
+  return <RouteStudio key={user ?? "local"} />;
+}
+function RouteStudio() {
+  const session = useSession();
+  const { plans: saved, loaded, warning } = useRouteLibrary();
+  const { syncing, error: syncError } = useRouteSyncStatus();
+  const wide = useWindowDimensions().width >= 1100;
+  const [fitRequest, setFitRequest] = useState(0),
     [points, setPoints] = useState<TrackPoint[]>([]),
     [title, setTitle] = useState("My route"),
     a = useAction();
-  const { run, setMessage } = a;
-  useEffect(() => {
-    void run(async () => {
-      setSaved(await loadPlans());
-      setLoaded(true);
-    });
-  }, [run]);
-  const meters = planDistance(points);
+  const { setMessage } = a;
+  const meters = useMemo(() => planDistance(points), [points]);
   const addWaypoint = useCallback(
     (coordinate: { latitude: number; longitude: number }) => {
       try {
@@ -49,64 +58,122 @@ export default function Routes() {
   );
   return (
     <Screen>
-      <Heading eyebrow="Choose your own way">Route studio</Heading>
-      <Copy muted>
-        Tap the map to add waypoints. This basic builder connects them with
-        straight lines; roads and access restrictions are not checked.
-      </Copy>
-      <Copy>{planningLabel} - Straight-line mode</Copy>
-      <Copy muted>{routingUnavailable}</Copy>
-      <PlannerMap
-        points={points}
-        onWaypoint={addWaypoint}
-        fitRequest={fitRequest}
-      />
-      <Row>
-        <Button
-          secondary
-          title="Fit map to route"
-          disabled={!points.length}
-          onPress={() => setFitRequest((v) => v + 1)}
-        />
-        <Button
-          secondary
-          disabled={!points.length}
-          title="Undo point"
-          onPress={() => setPoints((p) => p.slice(0, -1))}
-        />
-        <Button
-          disabled={!points.length}
-          secondary
-          title="Clear"
-          onPress={() => setPoints([])}
-        />
-      </Row>
-      <Field
-        label="Route name"
-        value={title}
-        onChangeText={setTitle}
-        maxLength={120}
-      />
-      <Copy>
-        {(meters / 1000).toFixed(2)} km · {points.length} waypoints
-      </Copy>
-      <Button
-        title="Save route offline"
-        disabled={points.length < 2 || !title.trim() || a.busy || !loaded}
-        onPress={() =>
-          void a.run(async () => {
-            const id =
-              String(Date.now()) + "-" + Math.random().toString(36).slice(2);
-            const next = await savePlan(
-              createPlan(title, points, id, new Date().toISOString()),
-            );
-            setSaved(next);
-            setPoints([]);
-          }, "Route geometry saved on this device. Base-map tiles still require internet.")
-        }
-      />
+      <View style={{ gap: 8 }}>
+        <Heading eyebrow="Choose your own way">Route studio</Heading>
+        <Copy muted>Tap or click the map to connect your waypoints.</Copy>
+      </View>
+      <View
+        style={{
+          flexDirection: wide ? "row" : "column",
+          gap: 20,
+          alignItems: "stretch",
+        }}
+      >
+        <View style={{ flex: 1, minWidth: 0, gap: 14 }}>
+          <PlannerMap
+            points={points}
+            onWaypoint={addWaypoint}
+            fitRequest={fitRequest}
+          />
+          <Row>
+            <Button
+              secondary
+              title="Fit map to route"
+              disabled={!points.length}
+              onPress={() => setFitRequest((v) => v + 1)}
+            />
+            <Button
+              secondary
+              disabled={!points.length}
+              title="Undo point"
+              onPress={() => setPoints((p) => p.slice(0, -1))}
+            />
+            <Button
+              disabled={!points.length}
+              secondary
+              title="Clear"
+              onPress={() => {
+                if (Platform.OS === "web") {
+                  if (
+                    window.confirm(
+                      "Clear all waypoints? Your saved routes will be kept.",
+                    )
+                  )
+                    setPoints([]);
+                } else
+                  Alert.alert(
+                    "Clear all waypoints?",
+                    "Your saved routes will be kept.",
+                    [
+                      { text: "Keep", style: "cancel" },
+                      {
+                        text: "Clear",
+                        style: "destructive",
+                        onPress: () => setPoints([]),
+                      },
+                    ],
+                  );
+              }}
+            />
+          </Row>
+          <Copy muted>
+            {routingUnavailable} Trails and terrain are unverified.
+          </Copy>
+        </View>
+        <View style={{ width: wide ? 300 : "100%", gap: 14 }}>
+          <Card>
+            <Copy>Straight-line mode</Copy>
+            <Copy muted>
+              {session
+                ? "New routes save offline and sync privately to your account. Existing local-only routes stay local."
+                : "Saved offline on this device. Sign in for automatic synchronization of new routes."}
+            </Copy>
+            <Copy>{planningLabel}</Copy>
+            <Copy>
+              {(meters / 1000).toFixed(2)} km · {points.length} waypoints
+            </Copy>
+            <Field
+              label="Route name"
+              value={title}
+              onChangeText={setTitle}
+              maxLength={120}
+            />
+            <Button
+              title={session ? "Save route" : "Save route offline"}
+              disabled={points.length < 2 || !title.trim() || a.busy || !loaded}
+              onPress={() =>
+                void a.run(
+                  async () => {
+                    const plan = createPlan(
+                      title,
+                      points,
+                      randomUUID(),
+                      new Date().toISOString(),
+                    );
+                    if (session) await queueAccountRoute(session.user.id, plan);
+                    else {
+                      await savePlan(plan);
+                      notifyRouteLibrary();
+                    }
+                    setPoints([]);
+                  },
+                  session
+                    ? "Saved offline. Account routes sync automatically when connected. Base-map tiles require internet."
+                    : "Route geometry saved on this device. Sign in to sync new account routes. Base-map tiles still require internet.",
+                )
+              }
+            />
+          </Card>
+          <Copy muted>{syncing ? "Syncing" : syncError || warning}</Copy>
+          {session ? (
+            <Button secondary title="Retry Sync" onPress={retryRouteSync} />
+          ) : null}
+          {a.message ? <Copy>{a.message}</Copy> : null}
+        </View>
+      </View>
       {saved.map((r) => (
-        <Card key={r.id}>
+        <Card key={`${r.accountId ?? "local"}:${r.id}`}>
+          <Copy muted>{routeStatus(r)}</Copy>
           <Copy>
             {r.title} · {r.points.length} waypoints
           </Copy>
@@ -126,19 +193,38 @@ export default function Routes() {
               setFitRequest((v) => v + 1);
             }}
           />
+          {r.syncStatus === "conflict" && r.accountId ? (
+            <Button
+              secondary
+              title="Use cloud version (discard local conflict)"
+              onPress={() =>
+                void a.run(() =>
+                  acceptCloudVersion(r.accountId!, r.id, r.localMutation!),
+                )
+              }
+            />
+          ) : null}
           <Button
             secondary
             title="Delete saved route"
             onPress={() =>
               void a.run(async () => {
-                const next = await deletePlan(r.id);
-                setSaved(next);
+                if (r.accountId)
+                  await queueAccountRoute(
+                    r.accountId,
+                    r,
+                    true,
+                    r.localMutation,
+                  );
+                else {
+                  await deletePlan(r.id);
+                  notifyRouteLibrary();
+                }
               })
             }
           />
         </Card>
       ))}
-      {a.message ? <Copy>{a.message}</Copy> : null}
     </Screen>
   );
 }

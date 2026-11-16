@@ -56,7 +56,7 @@ function AthleteProfile({
   const { workouts, preferences, ready, error } = useApp();
   const wide = useWindowDimensions().width >= 1100;
   const identity = useCurrentAthlete();
-  const { userId, profile, avatar } = identity;
+  const { userId, profile } = identity;
   const [editing, setEditing] = useState(false);
   const [now, setNow] = useState(Date.now);
   const { setMessage } = a;
@@ -67,7 +67,6 @@ function AthleteProfile({
   const preferenceKey = `athlete-sports:${userId ?? "local"}`;
   const selectedSports =
     preferred.key === preferenceKey ? preferred.sports : [];
-  const [avatarFailed, setAvatarFailed] = useState("");
   const memberships = useQuery({
     queryKey: ["athlete-memberships", userId],
     enabled: !!userId,
@@ -248,13 +247,13 @@ function AthleteProfile({
               overflow: "hidden",
             }}
           >
-            {userId && avatar.data && avatarFailed !== avatar.data ? (
+            {identity.avatarUrl ? (
               <Image
-                key={avatar.data}
-                source={{ uri: avatar.data }}
+                key={identity.avatarUrl}
+                source={{ uri: identity.avatarUrl }}
                 accessibilityLabel="Your profile photo"
                 style={{ width: 70, height: 70, borderRadius: 35 }}
-                onError={() => setAvatarFailed(avatar.data!)}
+                onError={identity.onAvatarError}
               />
             ) : (
               <Ionicons name="person-outline" color={c.forest} size={33} />
