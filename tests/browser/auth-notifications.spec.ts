@@ -944,6 +944,10 @@ test("profile save failures preserve the editor and allow retry", async ({
     .getByRole("button", { name: "Continue to Profile", exact: true })
     .click();
   await page.getByRole("button", { name: "Edit profile", exact: true }).click();
+  await expect(page.getByLabel("City", { exact: true })).toBeEditable();
+  await expect(
+    page.getByRole("button", { name: "Save profile", exact: true }),
+  ).toBeDisabled();
   await page.getByLabel("City", { exact: true }).fill("Pokhara");
   await page.evaluate(() => (globalThis as any).__authTest.offline(true));
   await page.getByRole("button", { name: "Save profile", exact: true }).click();

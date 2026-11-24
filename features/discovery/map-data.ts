@@ -1,6 +1,7 @@
 import type { TrackPoint } from "../../types/activity";
 import { distance, trackSegments } from "../../utils/tracking";
 import type { Area, SavedRoute } from "./catalog";
+import type { RouteCoordinate } from "../routes/routing";
 
 export type MapRoute = SavedRoute & { kind: "plan" | "recording" };
 export type DiscoveryMapProps = {
@@ -16,6 +17,7 @@ export type DiscoveryMapProps = {
   tracking?: boolean;
   variant?: "explore" | "record" | "planner" | "activity";
   tone?: "default" | "dark";
+  demoCoordinates?: readonly RouteCoordinate[];
 };
 export const validCoordinate = (p: { latitude: number; longitude: number }) =>
   Number.isFinite(p.latitude) &&

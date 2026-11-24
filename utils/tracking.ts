@@ -48,13 +48,13 @@ export function addPoint(w: Workout, point: TrackPoint): Workout {
   if (
     last &&
     last.segment === p.segment &&
-    dt < 30 &&
     distance(last, p) < Math.max(3, Math.min(last.accuracy, p.accuracy) * 0.4)
   )
     return w;
   return { ...w, points: [...w.points, p] };
 }
 export function activeTime(w: Workout, now = Date.now()) {
+  if (w.gpsFixAt !== undefined) return w.activeMs;
   return (
     w.activeMs + (w.resumedAt === null ? 0 : Math.max(0, now - w.resumedAt))
   );
@@ -72,7 +72,8 @@ export function resume(w: Workout, now = Date.now()): Workout {
 export function stats(w: Workout, now = Date.now()) {
   let meters = 0,
     elevation = 0,
-    movingMs = 0;
+    movingMs = 0,
+    movingMeters = 0;
   const splits: { km: number; seconds: number }[] = [];
   let splitStart = 0;
   for (let i = 1; i < w.points.length; i++) {
@@ -88,6 +89,7 @@ export function stats(w: Workout, now = Date.now()) {
     const move = d / (dt / 1000) >= 0.5 ? dt : 0;
     const priorMoving = movingMs;
     movingMs += move;
+    if (move > 0) movingMeters += d;
     while (meters >= (splits.length + 1) * 1000) {
       const crossing =
         priorMoving + move * (((splits.length + 1) * 1000 - before) / d);
@@ -114,6 +116,8 @@ export function stats(w: Workout, now = Date.now()) {
     meters,
     elevation,
     movingMs,
+    movingMeters,
+    movingPace: movingMeters > 0 ? movingMs / movingMeters : null,
     activeMs,
     elapsedMs: (w.endedAt ?? now) - w.startedAt,
     pace: meters > 0 ? movingMs / meters : null,

@@ -1,4 +1,5 @@
 export type Sport = "running" | "walking" | "cycling" | "hiking";
+export type RouteGuideReference = { scope: "local" | "account"; id: string };
 export type Visibility = "private" | "followers" | "public";
 export type TrackPoint = {
   latitude: number;
@@ -20,10 +21,13 @@ export type Workout = {
   state: "recording" | "paused" | "finished";
   activeMs: number;
   resumedAt: number | null;
+  // Native workouts accrue activeMs between verified fixes. Null means acquiring.
+  gpsFixAt?: number | null;
   segment: number;
   points: TrackPoint[];
   rejected: number;
   ownerId?: string;
+  routeGuide?: RouteGuideReference;
   syncedAt?: number;
 };
 export type Preferences = {

@@ -1,0 +1,199 @@
+{
+  "walk-kathmandu": {
+    "trip": {
+      "status": 0,
+      "units": "kilometers",
+      "locations": [
+        {
+          "lon": 85.3076,
+          "lat": 27.7043,
+          "original_index": 0
+        },
+        {
+          "lon": 85.3139,
+          "lat": 27.7125,
+          "original_index": 1
+        }
+      ],
+      "summary": {
+        "length": 1.434,
+        "time": 1015.743
+      },
+      "legs": [
+        {
+          "shape": "cl}ys@}{vuaD_ViEsB`MsF}JgCeEeCqDw@iA\\wD~@gMEiE_@}Cg@wDQkAuCuGmCuFyAwCoAiC_DoGsEuJsDwHqFwKm@}FsI_MqF{J}FqMGQ}KaV}AgDeF{M_KwSmKkTmEyJeBcD}AyBwAuCyAiGuBqGgBgDqCoEaRyd@}C_FmCcGoCsGq@iDe@_C{CoJwHoUgCuJSoAFmAyAs@qA{@c@c@oHmEoDyAeD_AkDo@km@_EoSeB{OuA{ReBiPwAqd@mEiHheA_b@cEmPeBi@G"
+        }
+      ]
+    }
+  },
+  "walk-multi": {
+    "trip": {
+      "status": 0,
+      "units": "kilometers",
+      "locations": [
+        {
+          "lon": 85.3076,
+          "lat": 27.7043,
+          "original_index": 0
+        },
+        {
+          "lon": 85.312,
+          "lat": 27.7083,
+          "original_index": 1
+        },
+        {
+          "lon": 85.3139,
+          "lat": 27.7125,
+          "original_index": 2
+        }
+      ],
+      "summary": {
+        "length": 1.591,
+        "time": 1125.566
+      },
+      "legs": [
+        {
+          "shape": "cl}ys@}{vuaD_ViEsB`MsF}JgCeEeCqDw@iA\\wD~@gMEiE_@}Cg@wDQkAuCuGmCuFyAwCoAiC_DoGsEuJsDwHqFwKm@}FsI_MqF{J}FqMGQ}KaV}AgDeF{M_KwSmKkTmEyJeBcD}AyBwAuCyAiGuBqGgBgDiBxC_@`BoG\\yAf@yAZaGzBgThKmDcA}Bu@LcDHmA"
+        },
+        {
+          "shape": "s|dzs@w_`vaD\\eGv@uGLq@?kDToBf@yAt@_Dt@eCn@qBkBeAn@yGn@}B|BgD\\qB?y@lAUHoA`CUbA{AoCsGq@iDe@_C{CoJwHoUgCuJSoAFmAyAs@qA{@c@c@oHmEoDyAeD_AkDo@km@_EoSeB{OuA{ReBiPwAqd@mEiHheA_b@cEmPeBi@G"
+        }
+      ]
+    }
+  },
+  "bike-bhaktapur": {
+    "trip": {
+      "status": 0,
+      "units": "kilometers",
+      "locations": [
+        {
+          "lon": 85.4278,
+          "lat": 27.6721,
+          "original_index": 0
+        },
+        {
+          "lon": 85.4359,
+          "lat": 27.6737,
+          "original_index": 1
+        }
+      ],
+      "summary": {
+        "length": 1.315,
+        "time": 291.501
+      },
+      "legs": [
+        {
+          "shape": "mq~ws@_ga}aD_AlRcRk@qOkBeCfC_F`FkHz@kH{Aia@oWmS}LgIwCaC_@aAGj@kAzAcCxB_EvHqJbBgDjAgE`FwUzAwIv@yGxA_AjDsFbE}FnAgDAsRFyHNoHk@cQW}]w_@tEaGGgDiAaEeCc@eBi@kBhAyC`KcNnD{DtDaS~AgWzAsWlAiHTgAr@Hz@eGPyMDoMIiDnAyUPyCd@eDWcQzHaBlHJYa_@w@{MmEqXpKcAE}YHaNGuA"
+        }
+      ]
+    }
+  },
+  "bike-kathmandu-square": {
+    "trip": {
+      "status": 0,
+      "units": "kilometers",
+      "locations": [
+        {
+          "lon": 85.3076,
+          "lat": 27.7043,
+          "original_index": 0
+        },
+        {
+          "lon": 85.3139,
+          "lat": 27.7125,
+          "original_index": 1
+        }
+      ],
+      "summary": {
+        "length": 1.652,
+        "time": 361.513
+      },
+      "legs": [
+        {
+          "shape": "sz{ys@ofwuaDjUm@J?rJe@^mh@i@i@{@YeAE}@A{FOK_@?g@zAyGbAiIw@_IViI~@wIkAUcK[EXGXIVKTOTQPSLSJUHWBW@W?WEWGUMUOQQOWMWIYE[C[?[yDc@sI~AeBUiz@qJyTcC{`@mEsI_MqF{J}FqMGQ}KaV}AgDeF{M_KwSmKkTmEyJeBcD}AyBwAuCyAiGuBqGgBgDqCoEaRyd@}C_FmCcGoCsGq@iDe@_C{CoJwHoUgCuJSoAFmAyAs@qA{@c@c@oHmEoDyAeD_AkDo@km@_EoSeB{OuA{ReBiPwAqd@mEiHheA_b@cEmPeBi@G"
+        }
+      ]
+    }
+  },
+  "walk-patan": {
+    "trip": {
+      "status": 0,
+      "units": "kilometers",
+      "locations": [
+        {
+          "lon": 85.3252,
+          "lat": 27.6733,
+          "original_index": 0
+        },
+        {
+          "lon": 85.3269,
+          "lat": 27.678,
+          "original_index": 1
+        }
+      ],
+      "summary": {
+        "length": 0.69,
+        "time": 489.168
+      },
+      "legs": [
+        {
+          "shape": "sm`xs@eryvaDuE_AmO{CkB_@uJoBf@Y{QgDwQaFsCgBqGsDgCyAwCyAs@]qC`IqAw@aDlFsCrEcBDoB|CoNfGgC~FsEyAaBw@yAq@}CeDoAwAqTiOu@]wBcCu@SaKeEiEyAqJ_EwGcAgGwFiLwDwLmCgGiAkBlCgYcItDgMrDsKtAaG"
+        }
+      ]
+    }
+  },
+  "walk-bhaktapur": {
+    "trip": {
+      "status": 0,
+      "units": "kilometers",
+      "locations": [
+        {
+          "lon": 85.4278,
+          "lat": 27.6721,
+          "original_index": 0
+        },
+        {
+          "lon": 85.4359,
+          "lat": 27.6737,
+          "original_index": 1
+        }
+      ],
+      "summary": {
+        "length": 0.961,
+        "time": 682.601
+      },
+      "legs": [
+        {
+          "shape": "qf~ws@ieb}aDXuEhBmZiAqBHmCLyDvB]pDoT}JmDiOeG_GmBgBsCXkBlFeUuTkHPeFd@cGpA{IfBwAv@iDqAgBQiDtFuWtCqCaA}Fc@qGOaFLwHL}BX_FCcKAoLf@cJT}Df@_Fj@gEnB{FjBuInAoHf@{FDcEMaCwBwIoAoGEaKyA{LkAaDsAcCmDqE{CaFoEiDeG_E}KeEcPwE{H{VE}YHaNGuA"
+        }
+      ]
+    }
+  },
+  "walk-stairs": {
+    "trip": {
+      "status": 0,
+      "units": "kilometers",
+      "locations": [
+        {
+          "lon": 85.2925,
+          "lat": 27.7145,
+          "original_index": 0
+        },
+        {
+          "lon": 85.2904,
+          "lat": 27.7149,
+          "original_index": 1
+        }
+      ],
+      "summary": {
+        "length": 0.219,
+        "time": 154.749
+      },
+      "legs": [
+        {
+          "shape": "{upzs@}zytaDW~BaCtRwCjRyFvDcA`DOd@_A|C]xFgBfYgAdMY~Bw@rGrAZfAt@t@lALj@"
+        }
+      ]
+    }
+  }
+}

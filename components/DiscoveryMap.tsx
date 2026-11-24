@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Platform, View } from "react-native";
-import MapView, { Marker, Polyline } from "react-native-maps";
+import MapView, { Marker, Polyline } from "./maps/NativeMap";
+import type { MapHandle } from "../features/maps/native-types";
+import { androidMapConfiguration } from "../features/maps/native-configuration";
 import { AthleteText as Text } from "./athlete";
 import { Button, useColors } from "./ui";
 import { areaPlaces, areaRegions } from "../features/discovery/catalog";
@@ -21,7 +23,7 @@ export default function DiscoveryMap({
   onSelect,
 }: DiscoveryMapProps) {
   points = routes.find((r) => r.id === selectedId)?.points ?? points;
-  const map = useRef<MapView>(null),
+  const map = useRef<MapHandle>(null),
     ready = useRef(false),
     c = useColors();
   const [status, setStatus] = useState("Loading map…");
@@ -46,7 +48,7 @@ export default function DiscoveryMap({
     else map.current?.animateToRegion(areaRegions[area]);
   }, [area, points]);
   useEffect(fit, [fit]);
-  if (Platform.OS === "android" && !process.env.EXPO_PUBLIC_GOOGLE_MAPS_KEY)
+  if (Platform.OS === "android" && !androidMapConfiguration())
     return (
       <View
         style={{
@@ -62,8 +64,8 @@ export default function DiscoveryMap({
           Explore Nepal
         </Text>
         <Text style={{ color: c.muted, fontSize: 13, lineHeight: 21 }}>
-          Configure the Android map key to view this map. Saved route geometry
-          and GPS recording are preserved.
+          Configure the Android MapTiler key to view this map. Saved route
+          geometry and GPS recording are preserved.
         </Text>
       </View>
     );
@@ -81,6 +83,11 @@ export default function DiscoveryMap({
             setStatus("");
             fit();
           }}
+          onMapError={() =>
+            setStatus(
+              "Map unavailable. Check your connection and MapTiler key restrictions, then retry.",
+            )
+          }
           userInterfaceStyle={c.bg === "#F6F7F4" ? "light" : "dark"}
         >
           {routes.flatMap((route) =>

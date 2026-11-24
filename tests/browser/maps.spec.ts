@@ -30,10 +30,10 @@ for (const width of [390, 1440]) {
       fullPage: true,
     });
     await page
-      .getByRole("button", { name: "Open route builder", exact: true })
+      .getByRole("button", { name: "New route", exact: true })
       .click();
     await expect(
-      page.getByRole("heading", { name: "Route studio", exact: true }),
+      page.getByRole("heading", { name: "Route Studio", exact: true }),
     ).toBeVisible();
   });
 }

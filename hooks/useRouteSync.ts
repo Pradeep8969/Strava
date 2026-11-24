@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AppState } from "react-native";
+import { AppState, Platform } from "react-native";
 import { useSession } from "./useSession";
 import {
   subscribeRouteQueue,
@@ -36,7 +36,8 @@ export function useRouteSync() {
       if (
         !active ||
         (AppState.currentState && AppState.currentState !== "active") ||
-        (typeof document !== "undefined" &&
+        (Platform.OS === "web" &&
+          typeof document !== "undefined" &&
           document.visibilityState === "hidden")
       )
         return;
@@ -69,28 +70,63 @@ export function useRouteSync() {
     const trigger = () => {
       void run();
     };
-    trigger();
-    const timer = setInterval(trigger, 60000);
-    const app = AppState.addEventListener("change", (state) => {
-      if (state === "active") trigger();
+    // Each optional subscription is isolated so a failed setup/removal cannot
+    // crash the authenticated tree or prevent the other listeners being removed.
+    const cleanups: (() => void)[] = [];
+    const safely = (action: () => void) => {
+      try {
+        action();
+      } catch {
+        report(
+          false,
+          "Sync unavailable — retry. Offline routes are preserved.",
+        );
+      }
+    };
+    safely(() => {
+      const timer = setInterval(trigger, 60000);
+      cleanups.push(() => clearInterval(timer));
     });
-    const queue = subscribeRouteQueue(trigger);
+    safely(() => {
+      const app = AppState.addEventListener("change", (state) => {
+        if (state === "active") trigger();
+      });
+      cleanups.push(() => app.remove());
+    });
+    safely(() => {
+      cleanups.push(subscribeRouteQueue(trigger));
+    });
     syncListeners.add(trigger);
-    if (typeof window !== "undefined")
-      window.addEventListener("online", trigger);
-    if (typeof document !== "undefined")
-      document.addEventListener("visibilitychange", trigger);
+    if (Platform.OS === "web") {
+      if (
+        typeof window !== "undefined" &&
+        typeof window.addEventListener === "function" &&
+        typeof window.removeEventListener === "function"
+      ) {
+        safely(() => {
+          window.addEventListener("online", trigger);
+          cleanups.push(() => window.removeEventListener("online", trigger));
+        });
+      }
+      if (
+        typeof document !== "undefined" &&
+        typeof document.addEventListener === "function" &&
+        typeof document.removeEventListener === "function"
+      ) {
+        safely(() => {
+          document.addEventListener("visibilitychange", trigger);
+          cleanups.push(() =>
+            document.removeEventListener("visibilitychange", trigger),
+          );
+        });
+      }
+    }
+    trigger();
     return () => {
       active = false;
       report(false);
-      clearInterval(timer);
-      app.remove();
-      queue();
       syncListeners.delete(trigger);
-      if (typeof window !== "undefined")
-        window.removeEventListener("online", trigger);
-      if (typeof document !== "undefined")
-        document.removeEventListener("visibilitychange", trigger);
+      cleanups.forEach((cleanup) => safely(cleanup));
     };
   }, [session]);
 }

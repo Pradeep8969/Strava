@@ -1,4 +1,5 @@
 import type { User } from "@supabase/supabase-js";
+import { ProfileFieldError } from "./edit-profile";
 
 const text = (value: unknown) =>
   typeof value === "string" ? value.trim() : "";
@@ -55,13 +56,17 @@ export function profileChanges(
   draft: typeof original,
 ) {
   if (!draft.name.trim() || Array.from(draft.name.trim()).length > 80)
-    throw new Error("Enter a name of up to 80 characters.");
+    throw new ProfileFieldError(
+      "Display name",
+      "Enter a name of up to 80 characters.",
+    );
   if (draft.username && !/^[a-z0-9_]{3,30}$/.test(draft.username))
-    throw new Error(
+    throw new ProfileFieldError(
+      "Username",
       "Use 3-30 lowercase letters, numbers, or underscores for your username.",
     );
   if (draft.bio.length > 500)
-    throw new Error("Bio must be at most 500 characters.");
+    throw new ProfileFieldError("Bio", "Bio must be at most 500 characters.");
   if (
     draft.avatar_path !== original.avatar_path &&
     draft.avatar_path &&

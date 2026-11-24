@@ -58,6 +58,10 @@ const config: ExpoConfig = {
     "expo-dev-client",
     "expo-font",
     [
+      "@maplibre/maplibre-react-native",
+      { android: { locationEngine: "default" } },
+    ],
+    [
       "expo-splash-screen",
       {
         backgroundColor: "#101416",
@@ -89,8 +93,12 @@ const config: ExpoConfig = {
       : []),
   ],
   experiments: { typedRoutes: false },
-  extra: process.env.EXPO_PUBLIC_EAS_PROJECT_ID
-    ? { eas: { projectId: process.env.EXPO_PUBLIC_EAS_PROJECT_ID } }
-    : {},
+  extra: {
+    eas: {
+      projectId:
+        process.env.EXPO_PUBLIC_EAS_PROJECT_ID ||
+        "e6ddc1e7-87f1-4b85-85c9-d7eea4fff615",
+    },
+  },
 };
 export default config;

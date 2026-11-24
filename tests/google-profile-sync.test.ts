@@ -4,6 +4,7 @@ import {
   resumeGoogleProfileSync,
   discardGoogleProfileSync,
 } from "../services/google-profile-sync";
+vi.mock("react-native", () => ({ Platform: { OS: "web" } }));
 const fake = vi.hoisted(() => ({
   stored: new Map<string, string>(),
   getUser: vi.fn(),

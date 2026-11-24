@@ -6,6 +6,7 @@ export default function PlannerMap({
   points,
   onWaypoint,
   fitRequest,
+  demoCoordinates,
 }: PlannerMapProps) {
   const width = useWindowDimensions().width;
   return (
@@ -15,6 +16,7 @@ export default function PlannerMap({
       variant="planner"
       onWaypoint={onWaypoint}
       fitRequest={fitRequest}
+      demoCoordinates={demoCoordinates}
     />
   );
 }

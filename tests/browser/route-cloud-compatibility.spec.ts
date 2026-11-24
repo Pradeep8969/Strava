@@ -40,11 +40,14 @@ test("IndexedDB, restored sessions, offline queue, reconnect, account isolation 
     await first.setOffline(false);
     await a.evaluate(() => window.dispatchEvent(new Event("online")));
     await expect.poll(() => cloud.rows.size, { timeout: 30000 }).toBe(1);
+    await a
+      .getByRole("button", { name: "My saved routes", exact: true })
+      .click();
     await expect(a.getByText("Synced", { exact: true })).toBeVisible();
     await a.getByRole("button", { name: "Retry Sync", exact: true }).click();
     await expect(a.getByText("Synced", { exact: true })).toBeVisible();
     expect(cloud.writes()).toBe(1);
-    await b.goto(`${baseURL}/routes`);
+    await b.goto(`${baseURL}/saved-routes`);
     await expect(
       b.getByText("Offline fixture · 2 waypoints", { exact: true }),
     ).toBeVisible();
@@ -64,7 +67,7 @@ test("IndexedDB, restored sessions, offline queue, reconnect, account isolation 
     expect(await readFixtureCache(a, otherOwner)).toEqual({});
     await changeFixtureAccount(a, null);
     await expect(
-      a.getByRole("button", { name: "Save route offline", exact: true }),
+      a.getByRole("button", { name: "New route", exact: true }),
     ).toBeVisible();
     await expect(
       a.getByText("Offline fixture · 2 waypoints", { exact: true }),
@@ -89,6 +92,9 @@ test("remote edits reconcile, stale edits preserve conflicts, and tombstones pro
   await page.goto("/routes");
   await placeFixturePlan(page, "Original fixture");
   await expect.poll(() => cloud.rows.size).toBe(1);
+  await page
+    .getByRole("button", { name: "My saved routes", exact: true })
+    .click();
   const row = [...cloud.rows.values()][0];
   cloud.rows.set(row.id, {
     ...row,

@@ -7,25 +7,38 @@ import { useGpsAcquisition } from "../features/recording/acquisition";
 
 export default memo(function RecorderMap({
   points,
+  guide,
 }: {
   points: TrackPoint[];
   current?: boolean;
+  guide?: { title: string; points: TrackPoint[] };
 }) {
   const acquisition = useGpsAcquisition((state) => state.state);
   const width = useWindowDimensions().width;
   const routes = useMemo<MapRoute[]>(
-    () =>
-      points.length
+    () => [
+      ...(guide
+        ? [
+            {
+              id: "planned-guide",
+              title: guide.title,
+              kind: "plan" as const,
+              points: guide.points,
+            },
+          ]
+        : []),
+      ...(points.length
         ? [
             {
               id: "current-recording",
               title: "Your recorded route",
-              kind: "recording",
+              kind: "recording" as const,
               points,
             },
           ]
-        : [],
-    [points],
+        : []),
+    ],
+    [points, guide],
   );
   return (
     <View
@@ -39,7 +52,9 @@ export default memo(function RecorderMap({
       <DiscoveryMap
         height={width >= 1100 ? 430 : width >= 768 ? 380 : 320}
         routes={routes}
-        selectedId="current-recording"
+        selectedId={
+          points.length || !guide ? "current-recording" : "planned-guide"
+        }
         tracking
         tone="dark"
         variant="record"

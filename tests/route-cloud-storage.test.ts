@@ -1,6 +1,16 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import type { Session } from "@supabase/supabase-js";
-import { createPlan, waypoint } from "../features/routes/planner";
+import {
+  createPlan,
+  waypoint,
+  type PlannedRoute,
+} from "../features/routes/planner";
+import { previewRecovery } from "../features/routes/recovery";
+import {
+  calculateRoute,
+  type RoutingRequest,
+} from "../features/routes/routing";
+import { loadPlans, savePlan } from "../services/planned-routes";
 import {
   queueAccountRoute,
   readAccountRoutes,
@@ -88,6 +98,80 @@ it("persists before networking and isolates same route IDs by user", async () =>
   expect(f.write).not.toHaveBeenCalled();
   expect((await readAccountRoutes("athlete"))[id].plan.title).toBe("A");
   expect((await readAccountRoutes("other"))[id].plan.title).toBe("B");
+});
+it("keeps road previews out of account queues, local plans, and import recovery", async () => {
+  const local = { id: "legacy", title: "Local plan", points: plan().points };
+  f.values.set("routes", [local]);
+  await queueAccountRoute("athlete", plan("Athlete plan"));
+  await queueAccountRoute("other", plan("Other plan"));
+  const original = structuredClone(f.values);
+
+  const request: RoutingRequest = {
+    profile: "walking",
+    waypoints: [
+      [0, 0],
+      [1, 0],
+    ],
+  };
+  const path = await calculateRoute(
+    {
+      id: "test",
+      profiles: ["walking"],
+      calculate: async () => ({
+        geometry: {
+          type: "LineString",
+          coordinates: [
+            [0, 0],
+            [0.5, 0.1],
+            [1, 0],
+          ],
+        },
+        distanceMeters: 120000,
+        waypointIndices: [0, 2],
+        provenance: {
+          provider: "test",
+          profile: "walking",
+          offlineStoragePermitted: false,
+          attribution: "Test fixture",
+          calculatedAt: "2026-11-18T00:00:00Z",
+        },
+      }),
+    },
+    request,
+    new AbortController().signal,
+  );
+  const routed = {
+    id,
+    title: "Road preview",
+    kind: "plan",
+    planningMode: "follow-roads-paths",
+    request,
+    path,
+  };
+  const unsupported = routed as unknown as PlannedRoute;
+  await expect(savePlan(unsupported)).rejects.toThrow("invalid");
+  await expect(queueAccountRoute("athlete", unsupported)).rejects.toThrow(
+    "unsupported planning mode",
+  );
+  expect(previewRecovery([local], [routed])).toMatchObject({
+    writable: false,
+    unreadable: 1,
+    additions: [],
+  });
+  expect(f.values).toEqual(original);
+  expect((await loadPlans())[0]).toMatchObject({
+    planningMode: "straight-line",
+    geometry: {
+      coordinates: [
+        [0, 0],
+        [1, 0],
+      ],
+    },
+  });
+  expect((await readAccountRoutes("athlete"))[id].plan.title).toBe(
+    "Athlete plan",
+  );
+  expect((await readAccountRoutes("other"))[id].plan.title).toBe("Other plan");
 });
 it("does not block local saves on network requests or acknowledge an edit made during upload", async () => {
   await queueAccountRoute("athlete", plan());

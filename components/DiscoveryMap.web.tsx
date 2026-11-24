@@ -24,6 +24,7 @@ import {
   mapOnlyLocation,
   type MapLocation,
 } from "../features/discovery/map-location";
+import { demoRouteColor } from "../features/routes/demo-preview";
 const emptyRoutes: MapRoute[] = [];
 export default function DiscoveryMap({
   area = "valley",
@@ -37,6 +38,7 @@ export default function DiscoveryMap({
   tracking = false,
   variant = tracking ? "record" : onWaypoint ? "planner" : "explore",
   tone = "default",
+  demoCoordinates,
 }: DiscoveryMapProps) {
   const palette = useColors();
   const c =
@@ -318,14 +320,55 @@ export default function DiscoveryMap({
     }
   }, [routeData, ready]);
   useEffect(() => {
+    const instance = map.current;
+    if (!instance || !ready || loading.current.pending) return;
+    const id = "route-studio-demo";
+    const existing = instance.getSource(id);
+    if (!existing && !demoCoordinates) return;
+    const data = {
+      type: "FeatureCollection",
+      features: demoCoordinates
+        ? [
+            {
+              type: "Feature",
+              properties: {},
+              geometry: { type: "LineString", coordinates: demoCoordinates },
+            },
+          ]
+        : [],
+    };
+    try {
+      if (existing) existing.setData(data);
+      else instance.addSource(id, { type: "geojson", data });
+      if (!instance.getLayer(id))
+        instance.addLayer({
+          id,
+          type: "line",
+          source: id,
+          paint: { "line-color": demoRouteColor, "line-width": 4 },
+          layout: { "line-join": "round", "line-cap": "round" },
+        });
+    } catch {
+      const timer = setTimeout(
+        () => setStatus("Could not draw the demo geometry. Retry the map."),
+        0,
+      );
+      return () => clearTimeout(timer);
+    }
+  }, [demoCoordinates, ready]);
+  useEffect(() => {
     if (map.current?.getLayer("routes"))
       map.current.setPaintProperty("routes", "line-color", [
         "case",
-        ["==", ["get", "id"], selectedId ?? ""],
+        [
+          "==",
+          ["get", variant === "record" ? "kind" : "id"],
+          variant === "record" ? "plan" : (selectedId ?? ""),
+        ],
         "#167F83",
         "#ED633E",
       ]);
-  }, [selectedId, ready]);
+  }, [selectedId, ready, variant]);
   useEffect(() => {
     const instance = map.current,
       lib = library.current;
@@ -431,7 +474,8 @@ export default function DiscoveryMap({
     const selected =
       geometry.find((r) => r.id === selectedId) ??
       (points?.length ? geometry[0] : undefined);
-    if (selected)
+    if (demoCoordinates) fit(demoCoordinates.map(([lon, lat]) => [lon, lat]));
+    else if (selected)
       fit(
         selected.points
           .filter(validCoordinate)
@@ -445,7 +489,17 @@ export default function DiscoveryMap({
         duration: 0,
       });
     }
-  }, [area, selectedId, geometry, points, ready, fitRequest, tracking, retry]);
+  }, [
+    area,
+    selectedId,
+    geometry,
+    points,
+    ready,
+    fitRequest,
+    tracking,
+    retry,
+    demoCoordinates,
+  ]);
   const acceptedLongitude = acceptedPoint?.longitude;
   const acceptedLatitude = acceptedPoint?.latitude;
   useEffect(() => {
@@ -486,7 +540,8 @@ export default function DiscoveryMap({
     const selected =
       geometry.find((route) => route.id === selectedId) ??
       (points?.length ? geometry[0] : undefined);
-    if (selected)
+    if (demoCoordinates) fit(demoCoordinates.map(([lon, lat]) => [lon, lat]));
+    else if (selected)
       fit(
         selected.points
           .filter(validCoordinate)
@@ -868,7 +923,9 @@ export default function DiscoveryMap({
             : variant === "activity"
               ? "Recorded GPS. Pauses and signal gaps stay separate."
               : variant === "planner"
-                ? "Straight-line waypoints, not road-following directions."
+                ? demoCoordinates
+                  ? "Orange connects waypoints. Teal shows the synthetic demo."
+                  : "Straight-line waypoints, not road-following directions."
                 : geometry.length
                   ? "Orange routes; teal selection. Plans use straight lines."
                   : variant === "explore"

@@ -128,7 +128,10 @@ function AthleteProfile({
     [workouts, now, userId],
   );
   const edit = () => {
-    if (data) setEditing(true);
+    if (data) {
+      setMessage("");
+      setEditing(true);
+    }
   };
   const [section, setSection] = useState<"Progress" | "Activities" | "More">(
     "Progress",
@@ -438,8 +441,9 @@ function AthleteProfile({
       {session && editing && data ? (
         <ProfileEditor
           key={userId}
-          onClose={() => {
+          onClose={(saved) => {
             setEditing(false);
+            if (saved) setMessage("Profile saved.");
           }}
         />
       ) : null}

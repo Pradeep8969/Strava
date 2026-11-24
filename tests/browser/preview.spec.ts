@@ -118,7 +118,7 @@ for (const [route, content] of [
   ["/community", "Your community"],
   ["/social", "Better together."],
   ["/search", "Find your people."],
-  ["/routes", "Route studio"],
+  ["/routes", "Route Studio"],
   ["/settings", "Settings & privacy"],
   ["/privacy-zones", "Keep home, home."],
   ["/coach", "A little guidance."],

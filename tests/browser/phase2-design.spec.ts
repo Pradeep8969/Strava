@@ -75,7 +75,7 @@ for (const width of [390, 1440])
       await page
         .getByLabel("Search routes", { exact: true })
         .fill("no matches");
-      await expect(page.getByText("No matching destinations")).toBeVisible();
+      await expect(page.getByText("No matching route ideas")).toBeVisible();
       await page
         .getByRole("button", { name: "Clear search routes", exact: true })
         .click();
@@ -174,4 +174,3 @@ test("missing demonstration event has a working recovery path", async ({
     page.getByRole("heading", { name: "Nepal events", exact: true }),
   ).toBeVisible();
 });
-

@@ -1,9 +1,11 @@
 import { browserRecordingIssue } from "../../../features/recording/browser";
+import { GPS_GAP_MS } from "../../../features/recording/native-gps";
 import {
   useGpsAcquisition,
+  useGpsDiagnostics,
   WaitingForGpsError,
 } from "../../../features/recording/acquisition";
-import { useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Platform,
@@ -11,7 +13,7 @@ import {
   View,
   useWindowDimensions,
 } from "react-native";
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import {
   AthletePage,
@@ -19,8 +21,14 @@ import {
   IconButton,
 } from "../../../components/athlete";
 import TrackMap from "../../../components/RecorderMap";
-import { useApp } from "../../../store/app";
+import { mutateWorkout, useApp } from "../../../store/app";
 import { useSession } from "../../../hooks/useSession";
+import { useRouteLibrary } from "../../../hooks/useRouteLibrary";
+import {
+  findRouteGuide,
+  guideSports,
+  parseRouteGuide,
+} from "../../../features/routes/guide";
 import { canAccessLocalWorkout } from "../../../features/auth/local-access";
 import { Empty } from "../../../components/ui";
 import { useAction } from "../../../hooks/useAction";
@@ -34,7 +42,10 @@ import {
 } from "../../../services/recorder";
 import { activeTime, stats } from "../../../utils/tracking";
 import { duration, length, pace } from "../../../utils/format";
-import type { Sport } from "../../../types/activity";
+import type { Sport, Workout } from "../../../types/activity";
+
+const emptyTrack: Workout["points"] = [];
+const RecordingMap = Platform.OS === "android" ? memo(TrackMap) : TrackMap;
 
 const sports = [
   { value: "running", label: "Running", icon: "walk-outline" },
@@ -42,49 +53,9 @@ const sports = [
   { value: "walking", label: "Walking", icon: "footsteps-outline" },
   { value: "hiking", label: "Hiking", icon: "trail-sign-outline" },
 ] as const;
-export default function Record() {
-  const { workouts, preferences: p, error, ready } = useApp();
-  const webIssue = Platform.OS === "web" ? browserRecordingIssue() : null;
-  const acquisition = useGpsAcquisition();
-  const session = useSession(),
-    action = useAction();
-  const wide = useWindowDimensions().width >= 1100;
-  const [sport, setSport] = useState<Sport>("running");
-  const [view, setView] = useState<"Metrics" | "Map">("Metrics");
-  const [now, setNow] = useState(() => Date.now());
-  const w = workouts.find((item) => item.state !== "finished");
-  const unfinishedId = w?.id;
-  useEffect(() => {
-    if (!unfinishedId) return;
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [unfinishedId]);
+function useRecordingMetrics(w: Workout | undefined) {
   // Geometry changes with the workout, not with every elapsed-time tick.
   const measured = useMemo(() => (w ? stats(w, w.startedAt) : null), [w]);
-  const s =
-    w && measured
-      ? {
-          ...measured,
-          activeMs: activeTime(w, w.endedAt ?? now),
-          elapsedMs: (w.endedAt ?? now) - w.startedAt,
-        }
-      : null;
-  const last = w?.points.at(-1);
-  const signal =
-    !!last && w?.state === "recording" && now - last.timestamp <= 15000;
-  const status =
-    webIssue ??
-    (Platform.OS === "web" &&
-    (acquisition.state === "acquiring" || acquisition.state === "waiting")
-      ? "Waiting for accurate GPS"
-      : !w
-        ? "Ready to record"
-        : w.state === "paused"
-          ? "Recording paused"
-          : signal
-            ? "GPS signal received"
-            : "Waiting for GPS");
-  const currentSport = w?.sport ?? sport;
   const elevation = useMemo(
     () =>
       w?.points.some((point, index) => {
@@ -103,15 +74,137 @@ export default function Record() {
       }),
     [w],
   );
+  return { measured, elevation };
+}
+
+export default function Record() {
+  const { workouts, preferences: p, error, ready } = useApp();
+  const webIssue = Platform.OS === "web" ? browserRecordingIssue() : null;
+  const acquisition = useGpsAcquisition();
+  const diagnostics = useGpsDiagnostics();
+  const session = useSession(),
+    action = useAction();
+  const wide = useWindowDimensions().width >= 1100;
+  const params = useLocalSearchParams<{ guide?: string; sport?: string }>();
+  const [sportChoice, setSportChoice] = useState<{
+    key: string;
+    sport: Sport;
+  }>();
+  const [viewChoice, setViewChoice] = useState<{
+    key: string;
+    view: "Metrics" | "Map";
+  }>();
+  const [now, setNow] = useState(() => Date.now());
+  const w = workouts.find((item) => item.state !== "finished");
+  const requestedGuide = parseRouteGuide(params.guide);
+  const guideId = w?.routeGuide?.id;
+  const guideScope = w?.routeGuide?.scope;
+  const reference = w
+    ? guideId && guideScope
+      ? { id: guideId, scope: guideScope }
+      : undefined
+    : requestedGuide;
+  const { plans, settled } = useRouteLibrary(!!reference);
+  const guide = findRouteGuide(plans, reference, session?.user.id);
+  const selectionKey = JSON.stringify([
+    w?.id,
+    params.guide,
+    params.sport,
+    reference?.id,
+  ]);
+  const sport =
+    sportChoice?.key === selectionKey
+      ? sportChoice.sport
+      : (requestedGuide &&
+          guideSports.find((item) => item.value === params.sport)?.value) ||
+        "running";
+  const view =
+    viewChoice?.key === selectionKey
+      ? viewChoice.view
+      : guide
+        ? "Map"
+        : "Metrics";
+  const clearGuideParams = () =>
+    router.setParams({ guide: undefined, sport: undefined });
+  const guideWorkoutId = guideId ? w?.id : undefined;
+  const exitGuide = () =>
+    void action.run(async () => {
+      if (guideWorkoutId)
+        await mutateWorkout(guideWorkoutId, (current) => ({
+          ...current,
+          routeGuide: undefined,
+        }));
+      clearGuideParams();
+    });
+  const unfinishedId = w?.id;
+  useEffect(() => {
+    if (!unfinishedId) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [unfinishedId]);
+  const { measured, elevation } = useRecordingMetrics(w);
+  const s =
+    w && measured
+      ? {
+          ...measured,
+          activeMs: activeTime(w, w.endedAt ?? now),
+          elapsedMs: (w.endedAt ?? now) - w.startedAt,
+        }
+      : null;
+  const last = w?.points.at(-1);
+  const isWeb = Platform.OS === "web";
+  const fixAt = isWeb ? last?.timestamp : w?.gpsFixAt;
+  const signal =
+    fixAt != null && w?.state === "recording" && now - fixAt <= GPS_GAP_MS;
+  const waitingForNativeGps = !isWeb && w?.state === "recording" && !signal;
+  const status =
+    webIssue ??
+    (Platform.OS === "web" &&
+    (acquisition.state === "acquiring" || acquisition.state === "waiting")
+      ? "Waiting for accurate GPS"
+      : !w
+        ? "Ready to record"
+        : w.state === "paused"
+          ? "Recording paused"
+          : signal
+            ? "GPS signal received"
+            : waitingForNativeGps && fixAt != null
+              ? "GPS signal lost. Reacquiring"
+              : "Waiting for GPS");
+  const currentSport = w?.sport ?? sport;
+  const cycling = currentSport === "cycling";
+  const movingPace = s?.movingPace ?? null;
+  const movingSpeed =
+    s && s.movingMs > 0
+      ? (
+          s.movingMeters /
+          (p.units === "mi" ? 1609.344 : 1000) /
+          (s.movingMs / 3600000)
+        ).toFixed(1)
+      : "—";
+  const shortDistance =
+    !isWeb &&
+    s &&
+    s.meters > 0 &&
+    s.meters < (p.units === "mi" ? 16.09344 : 10);
   const acquire = async () => {
     try {
       if (w) await resumeWorkout(w.id);
-      else await startWorkout(sport, session?.user.id);
+      else
+        await startWorkout(
+          sport,
+          session?.user.id,
+          guide || !settled ? reference : undefined,
+        );
     } catch (error) {
       // Low quality fixes are expected acquisition feedback, not a recording error.
       if (!(error instanceof WaitingForGpsError)) throw error;
     }
   };
+  const androidMapBelowControls =
+    Platform.OS === "android" && view === "Map" && !wide;
+  const controlsDisabled =
+    action.busy || !ready || (w?.state !== "recording" && !!webIssue);
   const start = () => void action.run(acquire);
   const toggle = () => {
     if (!w) return start();
@@ -126,10 +219,14 @@ export default function Record() {
       : "Resume activity";
   const map = (
     <View style={{ gap: 12 }}>
-      <TrackMap points={w?.points ?? []} current={!!w} />
+      <RecordingMap
+        points={w?.points ?? emptyTrack}
+        current={!!w}
+        guide={guide}
+      />
       {w ? (
         <Text style={{ color: "#AEBCC4", fontSize: 13, lineHeight: 19 }}>
-          {w.points.length} accepted GPS fixes · {w.rejected} rejected
+          {w.points.length} recorded track points · {w.rejected} rejected fixes
         </Text>
       ) : null}
     </View>
@@ -179,6 +276,40 @@ export default function Record() {
         }}
       >
         <View style={{ flex: wide ? 0.85 : 1, minWidth: 0, gap: 16 }}>
+          {guide || reference || params.guide !== undefined ? (
+            <View style={{ gap: 6 }}>
+              <Text
+                style={{ color: "#CED8DD" }}
+                accessibilityLiveRegion="polite"
+              >
+                {guide
+                  ? `Following ${guide.title} · Teal planned route (straight-line) · Orange recorded GPS`
+                  : w && !reference
+                    ? "Finish or discard the current activity before starting a guided activity."
+                    : reference && !settled
+                      ? "Loading saved route…"
+                      : "Saved route unavailable. You can record without a guide."}
+              </Text>
+              {__DEV__ && !isWeb ? (
+                <Text style={{ color: "#CED8DD", fontSize: 12 }}>
+                  Guide reference received: {reference ? "yes" : "no"} ·
+                  Storage:{" "}
+                  {guide
+                    ? "resolved"
+                    : reference && !settled
+                      ? "loading"
+                      : "unavailable"}{" "}
+                  · Waypoints: {guide?.points.length ?? 0} · Geometry lines:{" "}
+                  {guide && guide.points.length >= 2 ? 1 : 0}
+                </Text>
+              ) : null}
+              <TextButton
+                label="Exit route guide"
+                disabled={action.busy}
+                onPress={exitGuide}
+              />
+            </View>
+          ) : null}
           <View
             style={{
               flexDirection: "row",
@@ -198,7 +329,9 @@ export default function Record() {
                   disabled: !!w || action.busy,
                 }}
                 disabled={!!w || action.busy}
-                onPress={() => setSport(item.value)}
+                onPress={() =>
+                  setSportChoice({ key: selectionKey, sport: item.value })
+                }
                 style={{
                   flex: 1,
                   minHeight: 56,
@@ -227,7 +360,17 @@ export default function Record() {
               </Pressable>
             ))}
           </View>
-          {view === "Map" && !wide ? (
+          {action.message ||
+          error ||
+          (!isWeb && w?.state === "paused" && acquisition.state === "error") ? (
+            <Text
+              accessibilityRole="alert"
+              style={{ color: "#FFB39A", fontSize: 13, lineHeight: 20 }}
+            >
+              {action.message || error || acquisition.detail}
+            </Text>
+          ) : null}
+          {androidMapBelowControls ? null : view === "Map" && !wide ? (
             <View style={{ gap: 10 }}>
               <Text style={{ color: "#B2C4CD", fontSize: 13 }}>{status}</Text>
               {map}
@@ -271,7 +414,7 @@ export default function Record() {
                   {duration(s?.activeMs ?? 0)}
                 </Text>
                 <Text style={{ color: "#A4B5BE", fontSize: 11 }}>
-                  Active time
+                  {isWeb ? "Active time" : "GPS-tracked time"}
                 </Text>
               </View>
               <View
@@ -294,10 +437,16 @@ export default function Record() {
                       fontVariant: ["tabular-nums"],
                     }}
                   >
-                    {length(s?.meters ?? 0, p.units)}
+                    {shortDistance
+                      ? s.meters.toFixed(1)
+                      : length(s?.meters ?? 0, p.units)}
                   </Text>
                   <Text style={{ color: "#C7D2D8", fontSize: 13 }}>
-                    {p.units === "km" ? "Kilometres" : "Miles"}
+                    {shortDistance
+                      ? "Metres"
+                      : p.units === "km"
+                        ? "Kilometres"
+                        : "Miles"}
                   </Text>
                 </View>
                 <View style={{ flex: 1, alignItems: "center", gap: 4 }}>
@@ -309,10 +458,12 @@ export default function Record() {
                       fontVariant: ["tabular-nums"],
                     }}
                   >
-                    {pace(s?.pace ?? null, p.units)}
+                    {cycling ? movingSpeed : pace(movingPace, p.units)}
                   </Text>
                   <Text style={{ color: "#A4B5BE", fontSize: 11 }}>
-                    Avg. pace /{p.units}
+                    {cycling
+                      ? `Moving speed ${p.units}/h`
+                      : `Moving pace /${p.units}`}
                   </Text>
                 </View>
               </View>
@@ -325,18 +476,12 @@ export default function Record() {
                   borderTopColor: "#33434C",
                 }}
               >
-                <RecordMetric
-                  value={
-                    s && s.movingMs > 0
-                      ? (
-                          s.meters /
-                          (p.units === "mi" ? 1609.344 : 1000) /
-                          (s.movingMs / 3600000)
-                        ).toFixed(1)
-                      : "—"
-                  }
-                  label={`Speed ${p.units}/h`}
-                />
+                {!cycling ? (
+                  <RecordMetric
+                    value={movingSpeed}
+                    label={`Moving speed ${p.units}/h`}
+                  />
+                ) : null}
                 <RecordMetric
                   value={elevation && s ? String(Math.round(s.elevation)) : "—"}
                   label="Elevation gain m"
@@ -367,24 +512,18 @@ export default function Record() {
               onPress={() =>
                 wide
                   ? router.push("/routes")
-                  : setView(view === "Map" ? "Metrics" : "Map")
+                  : setViewChoice({
+                      key: selectionKey,
+                      view: view === "Map" ? "Metrics" : "Map",
+                    })
               }
             />
             <View style={{ alignItems: "center", gap: 8 }}>
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={mainLabel}
-                accessibilityState={{
-                  disabled:
-                    action.busy ||
-                    !ready ||
-                    (w?.state !== "recording" && !!webIssue),
-                }}
-                disabled={
-                  action.busy ||
-                  !ready ||
-                  (w?.state !== "recording" && !!webIssue)
-                }
+                accessibilityState={{ disabled: controlsDisabled }}
+                disabled={controlsDisabled}
                 onPress={toggle}
                 style={({ pressed }) => ({
                   width: wide ? 128 : 104,
@@ -403,12 +542,12 @@ export default function Record() {
                   color="white"
                   size={30}
                 />
+                <Text
+                  style={{ color: "white", fontSize: 12, fontWeight: "700" }}
+                >
+                  {!w ? "START" : w.state === "recording" ? "PAUSE" : "RESUME"}
+                </Text>
               </Pressable>
-              <Text
-                style={{ color: "#CED8DD", fontSize: 13, fontWeight: "700" }}
-              >
-                {!w ? "START" : w.state === "recording" ? "PAUSE" : "RESUME"}
-              </Text>
             </View>
             <View style={{ alignItems: "center", gap: 8 }}>
               <IconButton
@@ -429,10 +568,10 @@ export default function Record() {
                 onPress={() => {
                   if (w) {
                     if (!action.busy)
-                      void action.run(
-                        () => finishWorkout(w.id),
-                        "Activity saved. Find it in Activities.",
-                      );
+                      void action.run(async () => {
+                        await finishWorkout(w.id);
+                        if (params.guide !== undefined) clearGuideParams();
+                      }, "Activity saved. Find it in Activities.");
                   } else router.push("/settings");
                 }}
               />
@@ -459,6 +598,44 @@ export default function Record() {
                 ? `Moving ${duration(s!.movingMs)} · Elapsed ${duration(s!.elapsedMs)}`
                 : `${p.defaultVisibility.charAt(0).toUpperCase() + p.defaultVisibility.slice(1)} visibility · Saved on this device`}
           </Text>
+          {androidMapBelowControls ? (
+            <View style={{ gap: 10 }}>
+              <Text style={{ color: "#B2C4CD", fontSize: 13 }}>{status}</Text>
+              {map}
+            </View>
+          ) : null}
+          {waitingForNativeGps ? (
+            <Text style={{ color: "#CED8DD", fontSize: 13, lineHeight: 20 }}>
+              {acquisition.detail ||
+                "Waiting for an accurate fix. Go outdoors with a clear view of the sky and check that precise location is enabled."}
+            </Text>
+          ) : null}
+          {w?.state === "recording" && movingPace === null ? (
+            <Text style={{ color: "#CED8DD", fontSize: 13 }}>
+              {cycling ? "Speed" : "Pace"} appears after GPS measures movement.
+            </Text>
+          ) : null}
+          {__DEV__ && !isWeb ? (
+            <Text
+              selectable
+              testID="native-gps-diagnostics"
+              style={{ color: "#CED8DD", fontSize: 13, lineHeight: 20 }}
+            >
+              {[
+                "GPS diagnostics",
+                `Permission ${diagnostics.permission} · ${diagnostics.precision}`,
+                `Watcher ${diagnostics.watcher}`,
+                `Last fix age ${diagnostics.lastFixAt === null ? "unavailable" : `${Math.max(0, Math.floor((now - diagnostics.lastFixAt) / 1000))} s`} · accuracy ${diagnostics.accuracy === null ? "unavailable" : `${diagnostics.accuracy.toFixed(1)} m`}`,
+                `Accepted fixes ${diagnostics.accepted} · rejected ${diagnostics.rejected}`,
+                `Accepted fixes without a new track point ${diagnostics.withoutTrackPoint}`,
+                `Last rejection ${diagnostics.rejection || "none"}`,
+                `Track points ${w?.points.length ?? 0} · distance ${(s?.meters ?? 0).toFixed(1)} m`,
+                cycling
+                  ? `Moving speed ${movingSpeed === "—" ? "waiting for measured movement" : `${movingSpeed} ${p.units}/h`}`
+                  : `Moving pace ${movingPace === null ? "waiting for measured movement" : `${pace(movingPace, p.units)}/${p.units}`}`,
+              ].join("\n")}
+            </Text>
+          ) : null}
           {Platform.OS === "web" &&
           (acquisition.state === "acquiring" ||
             acquisition.state === "waiting" ||
@@ -479,14 +656,6 @@ export default function Record() {
                 />
               ) : null}
             </View>
-          ) : null}
-          {action.message || error ? (
-            <Text
-              accessibilityRole="alert"
-              style={{ color: "#FFB39A", fontSize: 13, lineHeight: 20 }}
-            >
-              {action.message || error}
-            </Text>
           ) : null}
         </View>
         {wide ? (
@@ -518,7 +687,7 @@ export default function Record() {
             paddingTop: 16,
           }}
         >
-          {Platform.OS !== "web" ? (
+          {!isWeb && w.state === "recording" ? (
             <TextButton
               label="Enable background recording"
               disabled={action.busy}

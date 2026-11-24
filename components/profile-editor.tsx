@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { BirthdatePicker } from "./birthdate-picker";
-import { Image, Modal, Pressable, Switch, View } from "react-native";
+import { Image, Modal, Pressable, Switch, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button, Copy, Field, Row, useColors } from "./ui";
@@ -17,18 +17,15 @@ import {
   type ChosenPhoto,
 } from "../services/avatar";
 import { saveProfileDetails } from "../services/profile-details";
-import { getValue, setValue } from "../services/database";
+import { getValue, serial, setValue } from "../services/database";
 import { useCurrentAthlete } from "../hooks/useCurrentAthlete";
 import { useAction } from "../hooks/useAction";
 import { providerProfile } from "../features/athlete/profile";
-import {
-  validateDetails,
-  type ProfileDraft,
-} from "../features/athlete/edit-profile";
+import type { ProfileDraft } from "../features/athlete/edit-profile";
 import { profileDetailsQuery } from "../services/profile-details-query";
 import {
   editorDraft,
-  validEditorDraft,
+  assessEditorDraft,
 } from "../features/athlete/editor-state";
 type DraftState = {
   original: ProfileDraft;
@@ -58,7 +55,11 @@ export function ProfileEditor({
   const [recoveredPhoto, setRecoveredPhoto] = useState<ChosenPhoto | null>(
     null,
   );
+  const photoRecoverySuperseded = useRef(false);
   const [restoreError, setRestoreError] = useState("");
+  const [photoRestoreError, setPhotoRestoreError] = useState("");
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [sheet, setSheet] = useState(false),
     [confirm, setConfirm] = useState<"delete" | "cancel" | null>(null);
   const [failed, setFailed] = useState("");
@@ -66,54 +67,91 @@ export function ProfileEditor({
   const key = `profile-editor-draft:${userId}`;
   useEffect(() => {
     let active = true;
-    void Promise.all([getValue<DraftState>(key), recoverAvatarSelection()])
-      .then(([saved, pendingPhoto]) => {
+    void serial(() => getValue<DraftState>(key))
+      .then((saved) => {
         if (!active) return;
-        setRecoveredPhoto(pendingPhoto);
-        setState((current) =>
-          saved
-            ? { ...saved, photo: pendingPhoto ?? saved.photo }
-            : current
-              ? { ...current, photo: pendingPhoto ?? current.photo }
-              : null,
-        );
+        if (saved) setState(saved);
         setRestored(true);
       })
       .catch((error) => {
-        if (active) setRestoreError(String(error.message ?? error));
+        if (active)
+          setRestoreError(
+            `Could not load your local profile draft. ${String(error.message ?? error)}`,
+          );
       });
     return () => {
       active = false;
     };
   }, [key, attempt]);
+  useEffect(() => {
+    if (!userId) return;
+    let active = true;
+    void recoverAvatarSelection()
+      .then((photo) => {
+        if (active && !photoRecoverySuperseded.current)
+          setRecoveredPhoto(photo);
+      })
+      .catch(() => {
+        if (active)
+          setPhotoRestoreError(
+            "Could not recover the selected photo. Choose it again if you want to change your picture.",
+          );
+      });
+    return () => {
+      active = false;
+    };
+  }, [userId]);
   if (!snapshot && identity.data && details.data !== undefined) {
-    setState({
-      ...editorDraft(identity.data, details.data),
-      photo: recoveredPhoto,
-    });
+    setState(editorDraft(identity.data, details.data));
   }
-  const ready = !!snapshot && restored;
+  const ready = !!identity.userId && !!snapshot && restored;
   const loadError =
     restoreError ||
     (!snapshot && details.isError && !details.isFetching
       ? details.error.message
-      : "");
+      : !snapshot && identity.profile?.isError && !identity.profile.isFetching
+        ? identity.profile.error.message
+        : "");
   // Keep all field and action positions stable during a cold request.
-  const state = snapshot ?? editorDraft(identity.data!, null);
-  const update = (patch: Partial<ProfileDraft>, photo?: ChosenPhoto | null) => {
+  const state =
+    snapshot ??
+    editorDraft(
+      identity.data ?? {
+        name: "",
+        username: null,
+        bio: "",
+        is_private: true,
+        avatar_path: null,
+      },
+      null,
+    );
+  const form = assessEditorDraft(state.original, state.draft, state.weightText);
+  const selectedPhoto = recoveredPhoto ?? state.photo;
+  const dirty = form.changed || !!selectedPhoto;
+  const canSave = ready && !a.busy && dirty && !form.error;
+  const update = (
+    patch: Partial<ProfileDraft>,
+    photo?: ChosenPhoto | null,
+    weightText = state.weightText,
+  ) => {
     if (!ready || a.busy) return;
+    if (photo !== undefined) {
+      photoRecoverySuperseded.current = true;
+      setRecoveredPhoto(null);
+    }
     const next = {
       ...state,
       draft: { ...state.draft, ...patch },
-      photo: photo === undefined ? state.photo : photo,
+      photo: photo === undefined ? selectedPhoto : photo,
+      weightText,
     };
     setState(next);
-    void setValue(key, next).catch((error) =>
+    void serial(() => setValue(key, next)).catch((error) =>
       a.setMessage(`Could not preserve draft: ${String(error)}`),
     );
   };
   const preview =
-    state?.photo?.uri ??
+    selectedPhoto?.uri ??
     (state?.draft.avatar_path === identity.data?.avatar_path
       ? identity.avatarUrl
       : state?.draft.avatar_path);
@@ -123,27 +161,34 @@ export function ProfileEditor({
         title="Edit athlete profile"
         detail="Make your Nepal adventure your own"
       />
+
       <Copy muted>
         Google sign-in refreshes your display name. Uploaded profile pictures
         stay until you replace or delete them. Other profile details stay as you
         set them.
       </Copy>
-      {a.message ? <Copy>{a.message}</Copy> : null}
-      {a.busy ? <Copy muted>Working on your profile…</Copy> : null}
-      <View style={{ minHeight: 24 }}>
-        {loadError ? (
-          <Copy>{loadError}</Copy>
-        ) : !snapshot ? (
-          <Copy muted>Loading profile details...</Copy>
-        ) : null}
-      </View>
+      {photoRestoreError ? <Copy>{photoRestoreError}</Copy> : null}
+      {loadError || !ready ? (
+        <View>
+          {loadError ? (
+            <Text accessibilityRole="alert" style={{ color: c.text }}>
+              {loadError}
+            </Text>
+          ) : !ready ? (
+            <Copy muted>Loading profile details...</Copy>
+          ) : null}
+        </View>
+      ) : null}
       {loadError ? (
         <Button
           title="Retry profile details"
           onPress={() => {
-            setRestoreError("");
-            setAttempt((n) => n + 1);
+            if (restoreError) {
+              setRestoreError("");
+              setAttempt((n) => n + 1);
+            }
             if (details.isError) void details.refetch();
+            if (identity.profile?.isError) void identity.profile.refetch();
           }}
         />
       ) : null}
@@ -167,7 +212,7 @@ export function ProfileEditor({
               style={{ width: 88, height: 88, borderRadius: 44 }}
               onError={() => {
                 setFailed(preview);
-                if (!state.photo && preview === identity.avatarUrl)
+                if (!selectedPhoto && preview === identity.avatarUrl)
                   identity.onAvatarError();
               }}
             />
@@ -176,7 +221,7 @@ export function ProfileEditor({
           )}
           <Copy>Change picture</Copy>
         </Pressable>
-        {state.photo ? (
+        {selectedPhoto ? (
           <Copy muted>
             Photo selected. Review the preview; it uploads only when you Save
             profile.
@@ -272,21 +317,7 @@ export function ProfileEditor({
               ? ""
               : String(state.draft.weight_kg))
           }
-          onChangeText={(weightText) => {
-            if (a.busy) return;
-            const next = {
-              ...state,
-              weightText,
-              draft: {
-                ...state.draft,
-                weight_kg: weightText.trim() ? Number(weightText) : null,
-              },
-            };
-            setState(next);
-            void setValue(key, next).catch((error) =>
-              a.setMessage(String(error)),
-            );
-          }}
+          onChangeText={(weightText) => update({}, undefined, weightText)}
           keyboardType="decimal-pad"
         />
         <Row>
@@ -298,62 +329,65 @@ export function ProfileEditor({
             onValueChange={(is_private) => update({ is_private })}
           />
         </Row>
+        {ready && form.error ? (
+          <Text accessibilityRole="alert" style={{ color: c.text }}>
+            {form.error.message}
+          </Text>
+        ) : null}
+        {a.message ? (
+          <Text accessibilityRole="alert" style={{ color: c.text }}>
+            {a.message}
+          </Text>
+        ) : null}
         <Button
-          title="Save profile"
-          disabled={
-            !ready || a.busy || !validEditorDraft(state.draft, state.weightText)
-          }
-          onPress={() =>
-            void a.run(async () => {
-              const draft = {
-                ...state.draft,
-                weight_kg:
-                  state.weightText === undefined
-                    ? state.draft.weight_kg
-                    : state.weightText.trim()
-                      ? Number(state.weightText)
-                      : null,
-                name: `${state.draft.first_name.trim()} ${state.draft.last_name.trim()}`.trim(),
-                username: state.draft.username?.trim() || null,
-              };
-              validateDetails(draft);
-              let uploaded: string | null = null;
+          title={saving ? "Saving profile…" : "Save profile"}
+          disabled={!canSave}
+          onPress={() => {
+            if (!canSave) return;
+            return a.run(async () => {
+              setSaving(true);
               try {
-                if (state.photo) {
-                  uploaded = await uploadAvatar(userId, state.photo);
-                  draft.avatar_path = uploaded;
-                }
-                await saveProfileDetails(
-                  userId,
-                  state.original,
-                  draft,
-                  state.revision,
-                );
-              } catch (error) {
-                if (uploaded)
-                  await removeOwnedAvatar(userId, uploaded).catch(
-                    () => undefined,
+                const draft = { ...form.value };
+                let uploaded: string | null = null;
+                try {
+                  if (selectedPhoto) {
+                    uploaded = await uploadAvatar(userId, selectedPhoto);
+                    draft.avatar_path = uploaded;
+                  }
+                  await saveProfileDetails(
+                    userId,
+                    state.original,
+                    draft,
+                    state.revision,
                   );
-                throw error;
+                } catch (error) {
+                  if (uploaded)
+                    await removeOwnedAvatar(userId, uploaded).catch(
+                      () => undefined,
+                    );
+                  throw error;
+                }
+                await serial(() => setValue(key, null)).catch(() => undefined);
+                await cache.invalidateQueries({
+                  queryKey: ["athlete-profile", userId],
+                });
+                await cache.invalidateQueries({
+                  queryKey: ["athlete-avatar", userId],
+                });
+                await cache.invalidateQueries({
+                  queryKey: ["athlete-details", userId],
+                });
+                if (draft.avatar_path !== state.original.avatar_path)
+                  await removeOwnedAvatar(
+                    userId,
+                    state.original.avatar_path,
+                  ).catch(() => undefined);
+                onClose(true);
+              } finally {
+                setSaving(false);
               }
-              await setValue(key, null);
-              await cache.invalidateQueries({
-                queryKey: ["athlete-profile", userId],
-              });
-              await cache.invalidateQueries({
-                queryKey: ["athlete-avatar", userId],
-              });
-              await cache.invalidateQueries({
-                queryKey: ["athlete-details", userId],
-              });
-              if (draft.avatar_path !== state.original.avatar_path)
-                await removeOwnedAvatar(
-                  userId,
-                  state.original.avatar_path,
-                ).catch(() => undefined);
-              onClose(true);
-            })
-          }
+            });
+          }}
         />
       </View>
       <Button
@@ -364,6 +398,31 @@ export function ProfileEditor({
           snapshot && restored ? setConfirm("cancel") : onClose()
         }
       />
+      {__DEV__ ? (
+        <Button
+          secondary
+          title={
+            diagnosticsOpen
+              ? "Hide developer diagnostics"
+              : "Show developer diagnostics"
+          }
+          onPress={() => setDiagnosticsOpen(!diagnosticsOpen)}
+        />
+      ) : null}
+      {__DEV__ && diagnosticsOpen ? (
+        <Copy muted>
+          {[
+            `Profile loaded: ${identity.data ? "yes" : "no"}`,
+            `Details loaded: ${details.data !== undefined ? "yes" : "no"}`,
+            `Signed in: ${userId ? "yes" : "no"}`,
+            `Draft restored: ${restored ? "yes" : "no"}`,
+            `Form changed: ${ready && dirty ? "yes" : "no"}`,
+            `Validation: ${ready ? (form.error ? `invalid (${form.error.field})` : "valid") : "pending"}`,
+            `Save busy: ${a.busy ? "yes" : "no"}`,
+            `Save enabled: ${canSave ? "yes" : "no"}`,
+          ].join("\n")}
+        </Copy>
+      ) : null}
       <Modal
         visible={sheet || !!confirm}
         transparent
@@ -415,7 +474,7 @@ export function ProfileEditor({
                   }
                   onPress={() => {
                     if (confirm === "cancel")
-                      void setValue(key, null)
+                      void serial(() => setValue(key, null))
                         .then(() => onClose())
                         .catch((error) => a.setMessage(String(error)));
                     else {

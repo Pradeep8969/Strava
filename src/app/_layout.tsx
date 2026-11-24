@@ -71,7 +71,14 @@ function AppLayout() {
         />
         <Stack.Screen name="social" options={{ title: "Athlete feed" }} />
         <Stack.Screen name="search" options={{ title: "Find athletes" }} />
-        <Stack.Screen name="routes" options={{ title: "Route studio" }} />
+        <Stack.Screen
+          name="routes"
+          options={{ title: "Route Studio", headerRight: () => null }}
+        />
+        <Stack.Screen
+          name="saved-routes"
+          options={{ title: "My Saved Routes", headerRight: () => null }}
+        />
         <Stack.Screen
           name="privacy-zones"
           options={{ title: "Privacy zones" }}

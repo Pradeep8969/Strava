@@ -8,6 +8,21 @@ export const useGpsAcquisition = create<{
   detail: string;
 }>(() => ({ state: "idle", detail: "" }));
 
+export const emptyGpsDiagnostics = {
+  permission: "unknown",
+  precision: "unknown",
+  watcher: "idle",
+  lastFixAt: null as number | null,
+  accuracy: null as number | null,
+  accepted: 0,
+  withoutTrackPoint: 0,
+  rejected: 0,
+  rejection: "",
+};
+export const useGpsDiagnostics = create<typeof emptyGpsDiagnostics>(
+  () => emptyGpsDiagnostics,
+);
+
 export class WaitingForGpsError extends Error {}
 
 export function acquisitionDetail(point: TrackPoint, now = Date.now()) {

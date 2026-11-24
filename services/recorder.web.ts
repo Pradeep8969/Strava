@@ -8,7 +8,7 @@ import {
 } from "../features/recording/browser";
 import { readWorkouts, writeWorkout, deleteWorkout, serial } from "./database";
 import { mutateWorkout, useApp } from "../store/app";
-import type { Sport, Workout } from "../types/activity";
+import type { RouteGuideReference, Sport, Workout } from "../types/activity";
 import {
   useGpsAcquisition,
   validateAcquisition,
@@ -133,7 +133,11 @@ function watch(id: string) {
       );
   }, 5000);
 }
-export function startWorkout(sport: Sport, ownerId?: string) {
+export function startWorkout(
+  sport: Sport,
+  ownerId?: string,
+  routeGuide?: RouteGuideReference,
+) {
   return command(async () => {
     if ((await readWorkouts()).some((w) => w.state !== "finished"))
       throw new Error("Resume or discard your unfinished workout first.");
@@ -146,6 +150,7 @@ export function startWorkout(sport: Sport, ownerId?: string) {
       sport,
       visibility: useApp.getState().preferences.defaultVisibility,
       ownerId,
+      routeGuide,
       startedAt: now,
       endedAt: null,
       state: "recording",
@@ -220,6 +225,7 @@ export function finishWorkout(id: string) {
             ...pause(w, interruptedAt ?? Date.now()),
             state: "finished",
             endedAt: Date.now(),
+            routeGuide: undefined,
           },
     );
     stop();

@@ -1,5 +1,5 @@
 import type { ProfileDraft, ProfileDetails } from "./edit-profile";
-import { splitName, validateDetails } from "./edit-profile";
+import { ProfileFieldError, splitName, validateDetails } from "./edit-profile";
 import { profileChanges } from "./profile";
 
 export function editorDraft(
@@ -11,7 +11,7 @@ export function editorDraft(
 ) {
   const names =
     details && `${details.first_name} ${details.last_name}`.trim() === base.name
-      ? details
+      ? { first_name: details.first_name, last_name: details.last_name }
       : splitName(base.name);
   const draft: ProfileDraft = {
     ...base,
@@ -32,23 +32,50 @@ export function editorDraft(
   };
 }
 
-export function validEditorDraft(draft: ProfileDraft, weightText?: string) {
+function normalizedDraft(
+  draft: ProfileDraft,
+  weightText?: string,
+): ProfileDraft {
+  const weight = weightText?.trim();
+  return {
+    ...draft,
+    first_name: draft.first_name.trim(),
+    last_name: draft.last_name.trim(),
+    city: draft.city.trim(),
+    province: draft.province.trim(),
+    username: draft.username?.trim() || null,
+    weight_kg:
+      weight === undefined
+        ? draft.weight_kg
+        : !weight
+          ? null
+          : /^\d+(?:[.,]\d+)?$/.test(weight)
+            ? Number(weight.replace(",", "."))
+            : NaN,
+  };
+}
+
+export function assessEditorDraft(
+  original: ProfileDraft,
+  draft: ProfileDraft,
+  weightText?: string,
+) {
+  const baseline = normalizedDraft(original);
+  const value = normalizedDraft(draft, weightText);
+  if (
+    value.first_name !== baseline.first_name ||
+    value.last_name !== baseline.last_name
+  )
+    value.name = `${value.first_name} ${value.last_name}`.trim();
+  const changed = (Object.keys(value) as (keyof ProfileDraft)[]).some(
+    (key) => !Object.is(value[key], baseline[key]),
+  );
   try {
-    const value = {
-      ...draft,
-      name: `${draft.first_name.trim()} ${draft.last_name.trim()}`.trim(),
-      username: draft.username?.trim() || null,
-      weight_kg:
-        weightText === undefined
-          ? draft.weight_kg
-          : weightText.trim()
-            ? Number(weightText)
-            : null,
-    };
     validateDetails(value);
     profileChanges(value, value);
-    return true;
-  } catch {
-    return false;
+    return { value, changed, error: null };
+  } catch (error) {
+    if (!(error instanceof ProfileFieldError)) throw error;
+    return { value, changed, error };
   }
 }

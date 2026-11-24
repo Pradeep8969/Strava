@@ -5,11 +5,13 @@ import {
   ScrollView,
   Text,
   TextInput,
+  Platform,
   View,
   useWindowDimensions,
   type TextInputProps,
 } from "react-native";
 import { useApp } from "../store/app";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 /** Shared presentation tokens. Existing store/theme API is intentionally unchanged. */
 export function useColors() {
@@ -53,26 +55,37 @@ export function useColors() {
       };
 }
 
-export function Screen({ children }: React.PropsWithChildren) {
+export function Screen({
+  children,
+  scrollRef,
+  compact = false,
+}: React.PropsWithChildren<{
+  scrollRef?: React.Ref<React.ComponentRef<typeof ScrollView>>;
+  compact?: boolean;
+}>) {
   const c = useColors();
   const { width } = useWindowDimensions();
+  const { bottom } = useSafeAreaInsets();
   return (
     <ScrollView
+      ref={scrollRef}
       style={{ flex: 1, backgroundColor: c.bg }}
       contentContainerStyle={{
         alignItems: "center",
         flexGrow: 1,
-        paddingBottom: 55,
+        paddingBottom: (compact ? 16 : 32) + bottom,
       }}
       keyboardShouldPersistTaps="handled"
+      keyboardDismissMode="on-drag"
+      automaticallyAdjustKeyboardInsets={Platform.OS === "ios"}
     >
       <View
         style={{
           width: "100%",
           maxWidth: 1240,
           paddingHorizontal: width < 620 ? 16 : 32,
-          paddingTop: width < 620 ? 22 : 30,
-          gap: width < 620 ? 20 : 26,
+          paddingTop: compact ? 12 : width < 620 ? 22 : 30,
+          gap: compact ? 12 : width < 620 ? 20 : 26,
         }}
       >
         {children}
@@ -160,11 +173,14 @@ export function Button({
   return (
     <Pressable
       accessibilityRole="button"
+      accessibilityLabel={title}
       accessibilityState={{ disabled }}
       disabled={disabled}
       onPress={onPress}
       style={({ pressed }) => ({
         minHeight: 47,
+        maxWidth: "100%",
+        flexShrink: 1,
         justifyContent: "center",
         alignItems: "center",
         paddingHorizontal: 16,
@@ -180,6 +196,7 @@ export function Button({
           fontWeight: "800",
           fontSize: 13.5,
           textAlign: "center",
+          flexShrink: 1,
         }}
       >
         {title}

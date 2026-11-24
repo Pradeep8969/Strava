@@ -1,0 +1,51 @@
+name: stravakinda-kathmandu-pilot
+
+x-valhalla: &valhalla
+  image: ghcr.io/valhalla/valhalla:3.8.3@sha256:70b45295d81035e3562e1bbf996a28d5fc55e1ccc5d7e3fff9f297d3b1a1359f
+  pull_policy: never
+  restart: "no"
+  cpus: 1.0
+  mem_limit: 3g
+  memswap_limit: 3g
+  pids_limit: 128
+  init: true
+  working_dir: /pilot
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "2"
+
+services:
+  graph-builder:
+    <<: *valhalla
+    profiles: [build]
+    network_mode: none
+    entrypoint: [/bin/sh, /build-graph.sh]
+    volumes:
+      - type: bind
+        source: D:/stravakinda-kathmandu-valhalla/v1
+        target: /pilot
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./build-graph.sh
+        target: /build-graph.sh
+        read_only: true
+        bind:
+          create_host_path: false
+
+  valhalla:
+    <<: *valhalla
+    entrypoint: [/bin/sh, -ec]
+    command:
+      - test -f /pilot/graph.ready && exec valhalla_service /pilot/valhalla.json 1
+    ports:
+      - "127.0.0.1:8002:8002"
+    volumes:
+      - type: bind
+        source: D:/stravakinda-kathmandu-valhalla/v1
+        target: /pilot
+        read_only: true
+        bind:
+          create_host_path: false

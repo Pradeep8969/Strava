@@ -17,27 +17,49 @@ export type ProfileDraft = ProfileDetails & {
   is_private: boolean;
   avatar_path: string | null;
 };
+export class ProfileFieldError extends Error {
+  constructor(
+    readonly field: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
 export function splitName(name: string) {
   const [first = "", ...rest] = name.trim().split(/\s+/);
   return { first_name: first, last_name: rest.join(" ") };
 }
 export function validateDetails(draft: ProfileDetails, now = new Date()) {
-  if (
-    !draft.first_name.trim() ||
-    [...`${draft.first_name.trim()} ${draft.last_name.trim()}`.trim()].length >
-      80
-  )
-    throw new Error(
+  if (!draft.first_name.trim())
+    throw new ProfileFieldError(
+      "First name",
       "Enter a first name and a full name of up to 80 characters.",
     );
-  for (const field of [draft.city, draft.province])
-    if (field.length > 100)
-      throw new Error("City and province must be at most 100 characters.");
+  if (
+    [...`${draft.first_name.trim()} ${draft.last_name.trim()}`.trim()].length >
+    80
+  )
+    throw new ProfileFieldError(
+      "First or last name",
+      "Enter a first name and a full name of up to 80 characters.",
+    );
+  for (const [field, value] of [
+    ["City", draft.city],
+    ["Province", draft.province],
+  ])
+    if (value.length > 100)
+      throw new ProfileFieldError(
+        field,
+        `${field} must be at most 100 characters.`,
+      );
   if (
     draft.primary_sport &&
     !["running", "walking", "cycling", "hiking"].includes(draft.primary_sport)
   )
-    throw new Error("Choose a supported primary sport.");
+    throw new ProfileFieldError(
+      "Primary sport",
+      "Choose a supported primary sport.",
+    );
   if (
     draft.gender &&
     ![
@@ -48,14 +70,20 @@ export function validateDetails(draft: ProfileDetails, now = new Date()) {
       "prefer-not-to-say",
     ].includes(draft.gender)
   )
-    throw new Error("Choose a gender option or leave it blank.");
+    throw new ProfileFieldError(
+      "Gender",
+      "Choose a gender option or leave it blank.",
+    );
   if (
     draft.weight_kg !== null &&
     (!Number.isFinite(draft.weight_kg) ||
       draft.weight_kg < 20 ||
       draft.weight_kg > 500)
   )
-    throw new Error("Weight must be between 20 and 500 kilograms, or blank.");
+    throw new ProfileFieldError(
+      "Weight (kg)",
+      "Weight must be between 20 and 500 kilograms, or blank.",
+    );
   if (draft.birthdate) {
     const date = new Date(`${draft.birthdate}T00:00:00Z`);
     if (
@@ -65,7 +93,8 @@ export function validateDetails(draft: ProfileDetails, now = new Date()) {
       draft.birthdate > calendarString(localCalendar(now)) ||
       date.getUTCFullYear() < now.getFullYear() - 120
     )
-      throw new Error(
+      throw new ProfileFieldError(
+        "Date of birth",
         "Enter a valid birthdate as YYYY-MM-DD within the past 120 years.",
       );
   }

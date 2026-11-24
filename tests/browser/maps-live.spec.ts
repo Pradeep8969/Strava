@@ -68,9 +68,9 @@ test("Map library failure allows recovery and preserves navigation", async ({
   ).toBeVisible();
   await expect(page.getByRole("button", { name: "Retry map" })).toBeVisible();
   await page
-    .getByRole("button", { name: "Open route builder", exact: true })
+    .getByRole("button", { name: "New route", exact: true })
     .click();
   await expect(
-    page.getByRole("heading", { name: "Route studio" }),
+    page.getByRole("heading", { name: "Route Studio" }),
   ).toBeVisible();
 });

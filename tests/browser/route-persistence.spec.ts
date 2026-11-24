@@ -74,8 +74,11 @@ test("saved plans survive a complete browser process restart on the same origin"
     });
     page = await context.newPage();
     await adapter(page);
-    await page.goto(`${baseURL}/routes`);
-    await page.getByRole("button", { name: "Open", exact: true }).click();
+    await page.goto(`${baseURL}/saved-routes`);
+    await page
+      .getByRole("button", { name: "Open Restart fixture", exact: true })
+      .click();
+    await page.getByRole("button", { name: "Edit a copy in planner" }).click();
     await expect(page.getByLabel("Route name", { exact: true })).toHaveValue(
       "Restart fixture",
     );
@@ -131,11 +134,14 @@ test("malformed records cannot hide valid legacy plans or be rewritten by loadin
       }),
   );
   const before = await records(page);
-  await page.reload();
+  await page.goto("/saved-routes");
   await expect(
     page.getByText(/1 saved route record\(s\) could not be opened/),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Open", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Open Legacy fixture", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Edit a copy in planner" }).click();
   await expect(page.getByLabel("Route name", { exact: true })).toHaveValue(
     "Legacy fixture",
   );
@@ -203,8 +209,8 @@ test("simultaneous saves in two tabs retain both plans", async ({
   for (const page of pages)
     await expect(page.getByText(/Route geometry saved/)).toBeVisible();
   expect(await records(pages[0])).toHaveLength(2);
-  await pages[0].reload();
+  await pages[0].goto("/saved-routes");
   await expect(
-    pages[0].getByRole("button", { name: "Open", exact: true }),
+    pages[0].getByRole("button", { name: /^Open Tab fixture [01]$/ }),
   ).toHaveCount(2);
 });

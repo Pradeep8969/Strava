@@ -56,54 +56,67 @@ export function DashboardTabs<T extends string>({
   value,
   onChange,
   label,
+  wrap = false,
 }: {
   items: readonly T[];
   value: T;
   onChange: (value: T) => void;
   label: string;
+  wrap?: boolean;
 }) {
   const c = useColors();
-  return (
+  const container = {
+    gap: 4,
+    padding: 4,
+    backgroundColor: c.raised,
+    borderRadius: 9,
+  };
+  const tabs = items.map((item) => (
+    <Pressable
+      key={item}
+      accessibilityRole="tab"
+      accessibilityLabel={item}
+      aria-selected={item === value}
+      accessibilityState={{ selected: item === value }}
+      onPress={() => onChange(item)}
+      style={{
+        minHeight: wrap ? 44 : 36,
+        maxWidth: wrap ? "100%" : undefined,
+        paddingHorizontal: items.length > 4 ? 8 : 13,
+        borderRadius: 7,
+        justifyContent: "center",
+        backgroundColor: item === value ? c.text : "transparent",
+      }}
+    >
+      <Text
+        style={{
+          color: item === value ? c.panel : c.muted,
+          fontSize: items.length > 4 ? 11 : 12,
+          fontWeight: "600",
+        }}
+      >
+        {item}
+      </Text>
+    </Pressable>
+  ));
+  return wrap ? (
+    <View
+      accessibilityRole="tablist"
+      accessibilityLabel={label}
+      style={[container, { flexDirection: "row", flexWrap: "wrap" }]}
+    >
+      {tabs}
+    </View>
+  ) : (
     <ScrollView
       horizontal
       showsHorizontalScrollIndicator={false}
       style={{ flexGrow: 0 }}
-      contentContainerStyle={{
-        gap: 4,
-        padding: 4,
-        backgroundColor: c.raised,
-        borderRadius: 9,
-      }}
+      contentContainerStyle={container}
       accessibilityRole="tablist"
       accessibilityLabel={label}
     >
-      {items.map((item) => (
-        <Pressable
-          key={item}
-          accessibilityRole="tab"
-          accessibilityLabel={item}
-          aria-selected={item === value}
-          accessibilityState={{ selected: item === value }}
-          onPress={() => onChange(item)}
-          style={{
-            minHeight: 36,
-            paddingHorizontal: items.length > 4 ? 8 : 13,
-            borderRadius: 7,
-            justifyContent: "center",
-            backgroundColor: item === value ? c.text : "transparent",
-          }}
-        >
-          <Text
-            style={{
-              color: item === value ? c.panel : c.muted,
-              fontSize: items.length > 4 ? 11 : 12,
-              fontWeight: "600",
-            }}
-          >
-            {item}
-          </Text>
-        </Pressable>
-      ))}
+      {tabs}
     </ScrollView>
   );
 }

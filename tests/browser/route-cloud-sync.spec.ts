@@ -121,6 +121,10 @@ async function save(page: Page, title: string) {
   });
   await page.getByLabel("Route name", { exact: true }).fill(title);
   await page.getByRole("button", { name: "Save route", exact: true }).click();
+  await expect(page.getByText(/Saved offline/)).toBeVisible();
+  await page
+    .getByRole("button", { name: "My saved routes", exact: true })
+    .click();
   await expect(
     page.getByText(`${title} · 2 waypoints`, { exact: true }),
   ).toBeVisible();
@@ -151,11 +155,12 @@ test("Edge and Brave exchange private routes, retry offline saves, restore cache
     await save(edge, "Edge fixture");
     await expect.poll(() => cloud.size).toBe(1);
     const other = await braveContext.newPage();
-    await other.goto(`${baseURL}/routes`);
+    await other.goto(`${baseURL}/saved-routes`);
     await expect(
       other.getByText("Edge fixture · 2 waypoints", { exact: true }),
     ).toBeVisible();
     failure.value = true;
+    await other.goto(`${baseURL}/routes`);
     await save(other, "Brave offline fixture");
     await expect(
       other.getByText("Sync failed — retry", { exact: true }),
@@ -207,7 +212,7 @@ test("Edge and Brave exchange private routes, retry offline saves, restore cache
       other.getByText("Brave offline fixture · 2 waypoints", { exact: true }),
     ).toHaveCount(0);
     await expect(
-      other.getByRole("button", { name: "Save route offline", exact: true }),
+      other.getByRole("button", { name: "New route", exact: true }),
     ).toBeVisible();
   } finally {
     await edgeContext.close();

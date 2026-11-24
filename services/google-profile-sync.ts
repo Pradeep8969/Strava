@@ -1,10 +1,12 @@
+import { Platform } from "react-native";
 import { backend, storage } from "./supabase";
 import { loadAthleteProfile } from "./profile";
 import { avatarUrl, providerProfile } from "../features/athlete/profile";
 import { isCustomAvatar } from "../features/athlete/edit-profile";
 
 const pendingKey = (userId: string) =>
-  `stravakinda.google-profile-pending:${userId}`;
+  // Keep existing browser markers. Supabase user IDs are UUIDs.
+  `stravakinda.google-profile-pending${Platform.OS === "web" ? ":" : "."}${userId}`;
 const running = new Map<string, Promise<void>>();
 
 export async function discardGoogleProfileSync(userId: string) {

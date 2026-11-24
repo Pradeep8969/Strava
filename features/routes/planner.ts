@@ -1,12 +1,34 @@
 import type { TrackPoint } from "../../types/activity";
 import { validCoordinate } from "../discovery/map-data";
 import { distance } from "../../utils/tracking";
+import type { RouteCoordinate } from "./routing";
+import type { RoadPreviewMap } from "./road-preview";
+import type { Coordinate } from "../maps/native-types";
 
 export type PlannerMapProps = {
   points: TrackPoint[];
-  onWaypoint: (coordinate: { latitude: number; longitude: number }) => void;
+  onWaypoint?: (coordinate: { latitude: number; longitude: number }) => void;
   fitRequest: number;
+  demoCoordinates?: readonly RouteCoordinate[];
+  roadPreview?: RoadPreviewMap;
+  savedGeometry?: PlannedRoute["geometry"];
+  placement?: {
+    target?: Coordinate;
+    onConfirm: (coordinate: Coordinate) => void;
+  };
+  onCancelPlacement?: () => void;
+  hideWaypointLine?: boolean;
 };
+export function savedLine(
+  points: TrackPoint[],
+  geometry?: PlannedRoute["geometry"],
+): Coordinate[] {
+  if (!geometry) return points;
+  return geometry.coordinates.map(([longitude, latitude]) => ({
+    longitude,
+    latitude,
+  }));
+}
 export const planningLabel = "Approximate straight-line distance";
 export const routingUnavailable =
   "Road-following unavailable: no working routing service is configured. Roads, access restrictions and safety are not checked.";

@@ -45,6 +45,8 @@ export function AthletePage({
         paddingBottom: dark ? 24 : 32,
       }}
       keyboardShouldPersistTaps="handled"
+      keyboardDismissMode="on-drag"
+      automaticallyAdjustKeyboardInsets={Platform.OS === "ios"}
     >
       <View
         style={{

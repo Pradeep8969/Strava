@@ -2,7 +2,17 @@ import * as Location from "expo-location";
 import * as TaskManager from "expo-task-manager";
 import { randomUUID } from "expo-crypto";
 import { AppState } from "react-native";
-import { addPoint, pause, resume } from "../utils/tracking";
+import { resume } from "../utils/tracking";
+import {
+  emptyGpsDiagnostics,
+  useGpsAcquisition,
+  useGpsDiagnostics,
+} from "../features/recording/acquisition";
+import {
+  nativeGpsWorkout,
+  pauseNativeGps,
+  trackNativeFix,
+} from "../features/recording/native-gps";
 import {
   getValue,
   readWorkouts,
@@ -12,14 +22,19 @@ import {
   deleteWorkout,
 } from "./database";
 import { mutateWorkout, useApp } from "../store/app";
-import type { Sport, TrackPoint, Workout } from "../types/activity";
+import type {
+  RouteGuideReference,
+  Sport,
+  TrackPoint,
+  Workout,
+} from "../types/activity";
 export const BACKGROUND_TASK = "stravakinda-location-v1";
+const development = typeof __DEV__ !== "undefined" && __DEV__;
 let watcher: Location.LocationSubscription | null = null;
 let foregroundId: string | null = null;
 let autoPaused = false;
 let stationarySince: number | null = null;
 let generation = 0;
-let interruptedAt: number | null = null;
 let commands: Promise<unknown> = Promise.resolve();
 function command<T>(work: () => Promise<T>): Promise<T> {
   const next = commands.then(work);
@@ -31,30 +46,20 @@ function detachForeground() {
   watcher?.remove();
   watcher = null;
   foregroundId = null;
+  if (development && useGpsDiagnostics.getState().watcher !== "failed")
+    useGpsDiagnostics.setState({ watcher: "stopped" });
 }
 function reportSaveFailure(id: string, error: unknown, gpsError = false) {
   detachForeground();
-  const workout = useApp.getState().workouts.find((w) => w.id === id);
-  if (workout)
-    interruptedAt = Math.max(
-      workout.resumedAt ?? workout.startedAt,
-      workout.points.at(-1)?.timestamp ?? workout.startedAt,
-    );
+  const detail = gpsError
+    ? "GPS updates failed. Check location permission and reception, then resume."
+    : `Recording paused because it could not be saved: ${String(error)}. Check device storage before resuming.`;
+  useGpsAcquisition.setState({ state: "error", detail });
   useApp.setState((state) => ({
     workouts: state.workouts.map((w) =>
-      w.id === id
-        ? pause(
-            w,
-            Math.max(
-              w.resumedAt ?? w.startedAt,
-              w.points.at(-1)?.timestamp ?? w.startedAt,
-            ),
-          )
-        : w,
+      w.id === id && w.state !== "finished" ? pauseNativeGps(w) : w,
     ),
-    error: gpsError
-      ? `Recording paused because GPS failed: ${String(error)}. Check location permission and reception, then resume.`
-      : `Recording paused because it could not be saved: ${String(error)}. Check device storage before resuming.`,
+    error: detail,
   }));
 }
 export function fromLocation(l: Location.LocationObject): TrackPoint {
@@ -78,37 +83,98 @@ async function ingest(
   locations: Location.LocationObject[],
   token?: number,
 ) {
+  const receivedAt = Date.now();
   await mutateWorkout(id, (w) =>
-    token !== undefined && token !== generation
+    (token !== undefined ? token !== generation : foregroundId === id)
       ? w
       : locations
           .sort((a, b) => a.timestamp - b.timestamp)
           .reduce((current, l) => {
-            if (current.state === "finished") return current;
-            if (
+            if (development) {
+              const accuracy = l.coords.accuracy;
+              useGpsDiagnostics.setState({
+                lastFixAt: Number.isFinite(l.timestamp) ? l.timestamp : null,
+                accuracy:
+                  accuracy !== null &&
+                  Number.isFinite(accuracy) &&
+                  accuracy >= 0
+                    ? accuracy
+                    : null,
+              });
+            }
+            if (current.state !== "recording" && !autoPaused) return current;
+            const speed = l.coords.speed;
+            const useAutoPause =
               useApp.getState().preferences.autoPause &&
-              l.coords.speed !== null &&
-              l.coords.speed >= 0 &&
-              (l.coords.accuracy ?? 100) <= 20
-            ) {
-              if (l.coords.speed < 0.5) {
+              speed !== null &&
+              Number.isFinite(speed) &&
+              speed >= 0 &&
+              (l.coords.accuracy ?? 100) <= 20;
+            const autoResuming =
+              autoPaused &&
+              useAutoPause &&
+              speed >= 0.5 &&
+              current.state === "paused";
+            const beforeFix = current;
+            if (autoResuming) current = resume(current, l.timestamp);
+            const result = trackNativeFix(
+              current,
+              fromLocation(l),
+              receivedAt,
+              token !== undefined,
+            );
+            if (result.issue) {
+              if (development)
+                useGpsDiagnostics.setState((state) => ({
+                  rejected: state.rejected + 1,
+                  rejection: result.issue,
+                }));
+              if (token !== undefined)
+                useGpsAcquisition.setState({
+                  state: "waiting",
+                  detail: result.issue,
+                });
+              return autoResuming
+                ? { ...beforeFix, rejected: result.workout.rejected }
+                : result.workout;
+            }
+            if (result.ignored && development)
+              useGpsDiagnostics.setState((state) => ({
+                rejected: state.rejected + 1,
+                rejection: "Duplicate or out-of-order fix",
+              }));
+            if (
+              result.workout.gpsFixAt === current.gpsFixAt ||
+              result.workout.gpsFixAt !== l.timestamp
+            )
+              return result.workout;
+            if (development)
+              useGpsDiagnostics.setState((state) => ({
+                accepted: state.accepted + 1,
+                withoutTrackPoint:
+                  state.withoutTrackPoint +
+                  Number(
+                    result.workout.points.length === current.points.length,
+                  ),
+              }));
+            if (token !== undefined)
+              useGpsAcquisition.setState({ state: "ready", detail: "" });
+            if (autoResuming) autoPaused = false;
+            if (useAutoPause) {
+              if (speed < 0.5) {
                 stationarySince ??= l.timestamp;
                 if (
                   l.timestamp - stationarySince > 15000 &&
                   current.state === "recording"
                 ) {
                   autoPaused = true;
-                  return pause(current, l.timestamp);
+                  return pauseNativeGps(result.workout);
                 }
               } else {
                 stationarySince = null;
-                if (autoPaused && current.state === "paused") {
-                  autoPaused = false;
-                  current = resume(current, l.timestamp);
-                }
               }
             }
-            return addPoint(current, fromLocation(l));
+            return result.workout;
           }, w),
   );
 }
@@ -125,47 +191,85 @@ TaskManager.defineTask<{ locations: Location.LocationObject[] }>(
 );
 export async function attachForeground(id: string) {
   detachForeground();
+  useGpsAcquisition.setState({ state: "acquiring", detail: "" });
   foregroundId = id;
   const token = generation;
-  const subscription = await Location.watchPositionAsync(
-    {
-      accuracy: Location.Accuracy.High,
-      timeInterval: 3000,
-      distanceInterval: 3,
-    },
-    (location) => {
-      if (token !== generation) return;
-      void ingest(id, [location], token).catch((e) => reportSaveFailure(id, e));
-    },
-    (reason) => {
-      if (token !== generation) return;
-      reportSaveFailure(id, reason, true);
-      void command(() =>
-        mutateWorkout(id, (w) =>
-          pause(
-            w,
-            Math.max(
-              w.resumedAt ?? w.startedAt,
-              w.points.at(-1)?.timestamp ?? w.startedAt,
-            ),
-          ),
-        ),
-      ).catch((e) => reportSaveFailure(id, e));
-    },
-  );
-  if (token !== generation) subscription.remove();
-  else watcher = subscription;
+  if (development) useGpsDiagnostics.setState({ watcher: "starting" });
+  try {
+    const subscription = await Location.watchPositionAsync(
+      {
+        accuracy: Location.Accuracy.High,
+        timeInterval: 3000,
+        distanceInterval: 0,
+      },
+      (location) => {
+        if (token !== generation) return;
+        void ingest(id, [location], token).catch((e) => {
+          if (token === generation) reportSaveFailure(id, e);
+        });
+      },
+      () => {
+        if (token !== generation) return;
+        if (development) useGpsDiagnostics.setState({ watcher: "failed" });
+        reportSaveFailure(id, undefined, true);
+        void command(() => mutateWorkout(id, pauseNativeGps)).catch((e) =>
+          reportSaveFailure(id, e),
+        );
+      },
+    );
+    if (token !== generation) subscription.remove();
+    else {
+      watcher = subscription;
+      if (development) useGpsDiagnostics.setState({ watcher: "started" });
+    }
+  } catch {
+    if (development && token === generation)
+      useGpsDiagnostics.setState({ watcher: "failed" });
+    if (token === generation)
+      useGpsAcquisition.setState({
+        state: "error",
+        detail: "Could not start GPS. Check location settings, then resume.",
+      });
+    throw new Error(
+      "Could not start GPS. Check location settings, then resume.",
+    );
+  }
 }
-async function start(sport: Sport, ownerId?: string) {
-  if ((await readWorkouts()).some((w) => w.state !== "finished"))
-    throw new Error("Resume or discard your unfinished workout first.");
+async function requireLocation() {
   const permission = await Location.requestForegroundPermissionsAsync();
+  if (development) {
+    const accuracy = permission.android?.accuracy ?? permission.ios?.accuracy;
+    useGpsDiagnostics.setState({
+      permission:
+        permission.status ?? (permission.granted ? "granted" : "denied"),
+      precision:
+        accuracy === "fine" || accuracy === "full"
+          ? "precise"
+          : accuracy === "coarse" || accuracy === "reduced"
+            ? "approximate"
+            : (accuracy ?? "unknown"),
+    });
+  }
   if (!permission.granted)
     throw new Error(
-      "Location permission is needed to record your route. Enable it in your phone settings.",
+      "Location permission is required. In your phone's app settings, allow location while using StravaKinda, then retry.",
+    );
+  if (permission.android?.accuracy === "coarse")
+    throw new Error(
+      "Enable precise location for StravaKinda in your phone's app settings, then retry.",
     );
   if (!(await Location.hasServicesEnabledAsync()))
-    throw new Error("Turn on your phone’s location services first.");
+    throw new Error("Turn on your phone's location services, then retry.");
+}
+async function start(
+  sport: Sport,
+  ownerId?: string,
+  routeGuide?: RouteGuideReference,
+) {
+  if ((await readWorkouts()).some((w) => w.state !== "finished"))
+    throw new Error("Resume or discard your unfinished workout first.");
+  if (development) useGpsDiagnostics.setState(emptyGpsDiagnostics);
+  await requireLocation();
   const now = Date.now();
   const w: Workout = {
     id: randomUUID(),
@@ -178,10 +282,12 @@ async function start(sport: Sport, ownerId?: string) {
     state: "recording",
     activeMs: 0,
     resumedAt: now,
+    gpsFixAt: null,
     segment: 0,
     points: [],
     rejected: 0,
     ownerId,
+    routeGuide,
   };
   await serial(async () => {
     if ((await readWorkouts()).some((item) => item.state !== "finished"))
@@ -189,61 +295,55 @@ async function start(sport: Sport, ownerId?: string) {
     await writeWorkout(w);
   });
   await useApp.getState().refresh();
-  interruptedAt = null;
   try {
     await attachForeground(w.id);
-  } catch (e) {
+  } catch {
     detachForeground();
-    await mutateWorkout(w.id, (x) => pause(x));
-    throw e;
+    await mutateWorkout(w.id, pauseNativeGps);
+    throw new Error(
+      "Could not start GPS. Check location settings, then resume.",
+    );
   }
   return w;
 }
 async function pauseRecording(id: string) {
   autoPaused = false;
   stationarySince = null;
-  await mutateWorkout(id, (x) => pause(x, interruptedAt ?? Date.now()));
+  await mutateWorkout(id, pauseNativeGps);
+  await stop();
 }
 async function resumeRecording(id: string) {
   let existing = (await readWorkouts()).find((w) => w.id === id);
   if (existing?.state === "recording" && foregroundId !== id)
-    existing = await mutateWorkout(id, (w) =>
-      pause(
-        w,
-        Math.max(
-          w.resumedAt ?? w.startedAt,
-          w.points.at(-1)?.timestamp ?? w.startedAt,
-        ),
-      ),
-    );
+    existing = await mutateWorkout(id, pauseNativeGps);
   if (!existing || existing.state !== "paused")
     throw new Error("Only a paused workout can be resumed.");
-  const permission = await Location.requestForegroundPermissionsAsync();
-  if (!permission.granted)
-    throw new Error(
-      "Location permission is needed. Enable it in your phone settings.",
-    );
-  if (!(await Location.hasServicesEnabledAsync()))
-    throw new Error("Turn on your phone's location services first.");
+  await requireLocation();
   autoPaused = false;
   stationarySince = null;
+  await mutateWorkout(id, (x) => resume(nativeGpsWorkout(x)));
   try {
     await attachForeground(id);
-    await mutateWorkout(id, (x) => resume(x));
-    interruptedAt = null;
-  } catch (error) {
+  } catch {
     detachForeground();
-    throw error;
+    await mutateWorkout(id, pauseNativeGps);
+    throw new Error(
+      "Could not restart GPS. Check location settings, then resume.",
+    );
   }
 }
 async function background(id: string) {
   const existing = (await readWorkouts()).find((w) => w.id === id);
-  if (!existing || existing.state === "finished")
-    throw new Error("No unfinished workout to record.");
+  if (!existing || existing.state !== "recording")
+    throw new Error(
+      "Resume your workout before enabling background recording.",
+    );
   if (!(await TaskManager.isAvailableAsync()))
     throw new Error(
       "Background recording needs an installed development build.",
     );
+  await requireLocation();
+  if (await Location.hasStartedLocationUpdatesAsync(BACKGROUND_TASK)) return;
   const result = await Location.requestBackgroundPermissionsAsync();
   if (!result.granted)
     throw new Error(
@@ -254,7 +354,7 @@ async function background(id: string) {
     await Location.startLocationUpdatesAsync(BACKGROUND_TASK, {
       accuracy: Location.Accuracy.High,
       timeInterval: 5000,
-      distanceInterval: 5,
+      distanceInterval: 0,
       pausesUpdatesAutomatically: false,
       showsBackgroundLocationIndicator: true,
       foregroundService: {
@@ -276,11 +376,19 @@ async function stop() {
   await setValue("backgroundWorkout", null);
 }
 async function finish(id: string) {
-  await mutateWorkout(id, (w) => ({
-    ...(w.state === "finished" ? w : pause(w, interruptedAt ?? Date.now())),
-    state: "finished",
-    endedAt: w.endedAt ?? Date.now(),
-  }));
+  await mutateWorkout(id, (w) => {
+    if (w.state === "finished") return w;
+    if (!w.points.length)
+      throw new Error(
+        "No GPS fixes have been recorded. Wait for GPS, or pause and keep the unfinished workout.",
+      );
+    return {
+      ...pauseNativeGps(w),
+      state: "finished",
+      endedAt: Date.now(),
+      routeGuide: undefined,
+    };
+  });
   await stop();
 }
 async function discard(id: string) {
@@ -293,24 +401,29 @@ async function discard(id: string) {
 }
 async function recover() {
   const active = (await readWorkouts()).find((w) => w.state !== "finished");
-  if (!active || foregroundId === active.id) return;
-  if (await Location.hasStartedLocationUpdatesAsync(BACKGROUND_TASK)) {
-    await attachForeground(active.id);
+  if (!active || foregroundId === active.id || active.state === "paused")
+    return;
+  if (
+    (await Location.hasStartedLocationUpdatesAsync(BACKGROUND_TASK)) &&
+    (await getValue<string>("backgroundWorkout")) === active.id
+  ) {
+    try {
+      await attachForeground(active.id);
+    } catch (error) {
+      detachForeground();
+      await mutateWorkout(active.id, pauseNativeGps);
+      throw error;
+    }
     return;
   }
   // No proof of movement after process interruption. Stop the timer at last evidence.
-  await mutateWorkout(active.id, (w) =>
-    pause(
-      w,
-      Math.max(
-        w.resumedAt ?? w.startedAt,
-        w.points.at(-1)?.timestamp ?? w.startedAt,
-      ),
-    ),
-  );
+  await mutateWorkout(active.id, pauseNativeGps);
 }
-export const startWorkout = (sport: Sport, ownerId?: string) =>
-  command(() => start(sport, ownerId));
+export const startWorkout = (
+  sport: Sport,
+  ownerId?: string,
+  routeGuide?: RouteGuideReference,
+) => command(() => start(sport, ownerId, routeGuide));
 export const pauseWorkout = (id: string) => command(() => pauseRecording(id));
 export const resumeWorkout = (id: string) => command(() => resumeRecording(id));
 export const finishWorkout = (id: string) => command(() => finish(id));
@@ -332,12 +445,13 @@ export function installRecorderLifecycle() {
     }
     if (state !== "background") return;
     if (foregroundId)
-      void (async () => {
-        if (!(await Location.hasStartedLocationUpdatesAsync(BACKGROUND_TASK))) {
-          const id = foregroundId;
-          detachForeground();
-          if (id) await pauseWorkout(id);
-        }
-      })().catch((e) => useApp.setState({ error: String(e) }));
+      void command(async () => {
+        const id = foregroundId;
+        if (!id) return;
+        const backgroundStarted =
+          await Location.hasStartedLocationUpdatesAsync(BACKGROUND_TASK);
+        detachForeground();
+        if (!backgroundStarted) await pauseRecording(id);
+      }).catch((e) => useApp.setState({ error: String(e) }));
   });
 }

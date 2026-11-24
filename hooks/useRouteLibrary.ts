@@ -3,29 +3,45 @@ import { useSession } from "./useSession";
 import { inspectSavedPlans } from "../services/planned-routes";
 import { readAccountRoutes, subscribeRoutes } from "../services/route-cloud";
 import type { PlannedRoute } from "../features/routes/planner";
-import type { RouteEntry } from "../features/routes/cloud-sync";
+import type { RouteCache, RouteEntry } from "../features/routes/cloud-sync";
 
 export type LibraryRoute = PlannedRoute & {
   syncStatus?: RouteEntry["status"];
   accountId?: string;
   localMutation?: string;
+  deleted?: boolean;
 };
-export function useRouteLibrary() {
+export function useRouteLibrary(enabled = true) {
   const user = useSession()?.user.id;
   const [state, setState] = useState<{
     user?: string;
     plans: LibraryRoute[];
     warning: string;
     loaded: boolean;
-  }>({ plans: [], warning: "", loaded: false });
+    settled: boolean;
+  }>({ plans: [], warning: "", loaded: false, settled: false });
   useEffect(() => {
+    if (!enabled) return;
     let active = true,
       sequence = 0;
     const reload = async () => {
       const request = ++sequence;
       try {
-        const legacy = await inspectSavedPlans();
-        const cache = user ? await readAccountRoutes(user) : {};
+        const [localResult, accountResult] = await Promise.allSettled([
+          inspectSavedPlans(),
+          user ? readAccountRoutes(user) : Promise.resolve({}),
+        ]);
+        const legacy =
+          localResult.status === "fulfilled"
+            ? localResult.value
+            : {
+                plans: [],
+                warning:
+                  "Local routes could not be read. Existing records are preserved.",
+                unreadable: 1,
+              };
+        const cache: RouteCache =
+          accountResult.status === "fulfilled" ? accountResult.value : {};
         const deletions = Object.values(cache).filter(
           (entry) =>
             entry.deleted &&
@@ -44,25 +60,35 @@ export function useRouteLibrary() {
               syncStatus: entry.status,
               accountId: user,
               localMutation: entry.mutation,
+              deleted: entry.deleted,
             })),
         ];
         if (active && request === sequence)
           setState({
             user,
             plans,
-            warning: [legacy.warning, deletionWarning]
+            warning: [
+              legacy.warning,
+              deletionWarning,
+              accountResult.status === "rejected" &&
+                "Account routes could not be read. Existing records are preserved.",
+            ]
               .filter(Boolean)
               .join(" "),
-            loaded: !!user || legacy.unreadable === 0,
+            loaded: user
+              ? accountResult.status === "fulfilled"
+              : legacy.unreadable === 0,
+            settled: true,
           });
       } catch {
-        if (active)
+        if (active && request === sequence)
           setState({
             user,
             plans: [],
             warning:
               "Saved routes could not be loaded. Storage is preserved. Retry Sync.",
             loaded: false,
+            settled: true,
           });
       }
     };
@@ -74,11 +100,16 @@ export function useRouteLibrary() {
       active = false;
       unsubscribe();
     };
-  }, [user]);
+  }, [user, enabled]);
   // Mask old state during the render that precedes effect cleanup on account changes.
-  return state.user === user
+  return enabled && state.user === user
     ? state
-    : { plans: [] as LibraryRoute[], warning: "", loaded: false };
+    : {
+        plans: [] as LibraryRoute[],
+        warning: "",
+        loaded: false,
+        settled: false,
+      };
 }
 export function routeStatus(route: LibraryRoute) {
   return route.syncStatus === "synced"
