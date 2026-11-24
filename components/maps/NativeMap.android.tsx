@@ -7,7 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Text, View } from "react-native";
+import { Pressable, Text, View } from "react-native";
 import {
   Camera,
   GeoJSONSource,
@@ -58,6 +58,7 @@ export default function NativeMap({
   onMapReady,
   onMapError,
   showOfflineGeometry,
+  dedicated,
   onTouchStart,
   onPress,
   style,
@@ -82,6 +83,7 @@ export default function NativeMap({
   const styleUrl = androidMapConfiguration()?.style;
   const [mapStyle, setMapStyle] = useState<string | null>(null);
   const [baseMapUnavailable, setBaseMapUnavailable] = useState(false);
+  const [styleAttempt, setStyleAttempt] = useState(0);
   const notifyMapError = useEffectEvent(() => onMapError?.());
   // Install the native request rule before mounting Map; stable ID is shared by
   // simultaneous maps and survives a retry without accumulating rules.
@@ -99,7 +101,10 @@ export default function NativeMap({
     let active = true;
     void loadAndroidStyle(styleUrl).then(
       (loaded) => {
-        if (active) setMapStyle(loaded);
+        if (active) {
+          setMapStyle(loaded);
+          setBaseMapUnavailable(false);
+        }
       },
       () => {
         if (!active) return;
@@ -110,7 +115,7 @@ export default function NativeMap({
     return () => {
       active = false;
     };
-  }, [styleUrl, showOfflineGeometry]);
+  }, [styleUrl, showOfflineGeometry, styleAttempt]);
   useImperativeHandle(
     ref,
     () => ({
@@ -162,8 +167,23 @@ export default function NativeMap({
   );
   const onlineStyle = styleUrl ? mapStyle : null;
   const styleToRender =
-    onlineStyle ?? (showOfflineGeometry ? offlineStyle : null);
-  if (!configured || !styleToRender) return null;
+    onlineStyle ??
+    (showOfflineGeometry && (!dedicated || !styleUrl || baseMapUnavailable)
+      ? offlineStyle
+      : null);
+  if (!configured || !styleToRender)
+    return dedicated ? (
+      <Text
+        style={{
+          position: "absolute",
+          top: "45%",
+          alignSelf: "center",
+          color: "#243733",
+        }}
+      >
+        Loading street map…
+      </Text>
+    ) : null;
   const checkIsCurrent =
     guideCheck.style === styleToRender && guideCheck.points === fitPoints;
   const guideVerified =
@@ -218,9 +238,10 @@ export default function NativeMap({
         dragPan
         touchZoom
         touchRotate
+        doubleTapZoom
         touchPitch={false}
         attribution
-        compass
+        compass={!dedicated}
         onDidFinishLoadingMap={onMapReady}
         onDidFinishRenderingMapFully={
           debugGuideLayer && !guideVerified ? inspectGuide : undefined
@@ -253,12 +274,31 @@ export default function NativeMap({
         {children}
       </Map>
       {onlineStyle ? <MapAttribution /> : null}
-      {showOfflineGeometry && (baseMapUnavailable || !styleUrl) ? (
+      {dedicated && baseMapUnavailable && styleUrl ? (
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => setStyleAttempt((attempt) => attempt + 1)}
+          style={{
+            position: "absolute",
+            bottom: 8,
+            left: 8,
+            minHeight: 44,
+            justifyContent: "center",
+            paddingHorizontal: 10,
+            backgroundColor: "#fff",
+            borderRadius: 8,
+          }}
+        >
+          <Text style={{ color: "#243733" }}>Base map unavailable · Retry</Text>
+        </Pressable>
+      ) : showOfflineGeometry && (baseMapUnavailable || !styleUrl) ? (
         <Text
           pointerEvents="none"
           style={{ position: "absolute", bottom: 8, left: 8, color: "#243733" }}
         >
-          Base map unavailable
+          {dedicated && !styleUrl
+            ? "Street map needs a MapTiler key"
+            : "Base map unavailable"}
         </Text>
       ) : null}
       {debugGuideLayer ? (

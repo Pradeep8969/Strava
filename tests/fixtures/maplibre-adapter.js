@@ -18,6 +18,7 @@
     getLayer(id) { return this.layer?.id === id ? this.layer : undefined; }
     setPaintProperty(id, name, value) { if (this.layer?.id === id) this.layer.paint[name] = value; }
     stop() {}
+    resetNorth() { this.cameraCalls.push({type: 'north'}); }
     addControl() {}
     getCanvas() { return this.canvas; }
     getSource(id) { return this.sources[id]; }

@@ -1,4 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { areaPlaces, areaRegions } from "../features/discovery/catalog";
 import {
   mapConfiguration,
@@ -25,6 +31,12 @@ import {
   type MapLocation,
 } from "../features/discovery/map-location";
 import { demoRouteColor } from "../features/routes/demo-preview";
+import { kathmanduRegion } from "../features/maps/dedicated";
+import {
+  coordinateBounds,
+  lngLat,
+  regionCamera,
+} from "../features/maps/native-camera";
 const emptyRoutes: MapRoute[] = [];
 export default function DiscoveryMap({
   area = "valley",
@@ -39,6 +51,7 @@ export default function DiscoveryMap({
   variant = tracking ? "record" : onWaypoint ? "planner" : "explore",
   tone = "default",
   demoCoordinates,
+  dedicated,
 }: DiscoveryMapProps) {
   const palette = useColors();
   const c =
@@ -94,6 +107,34 @@ export default function DiscoveryMap({
           terrain,
         );
   const style = config?.style;
+  const dedicatedMode = !!dedicated;
+  const dedicatedReady = dedicated?.onReady;
+  const dedicatedPin = dedicated?.pin;
+  useImperativeHandle(
+    dedicated?.mapRef,
+    () => ({
+      centerOn: (point, zoom, duration = 250) =>
+        map.current?.flyTo({ center: lngLat(point), zoom, duration }),
+      animateToRegion: (region, duration) =>
+        map.current?.flyTo({ ...regionCamera(region), duration }),
+      async resetNorth() {
+        map.current?.resetNorth?.();
+      },
+      fitToCoordinates(points, { edgePadding, animated }) {
+        const bounds = coordinateBounds(points);
+        if (bounds)
+          map.current?.fitBounds([bounds.slice(0, 2), bounds.slice(2)], {
+            padding: edgePadding,
+            maxZoom: 16,
+            duration: animated ? 350 : 0,
+          });
+      },
+    }),
+    [],
+  );
+  useEffect(() => {
+    if (ready) dedicatedReady?.();
+  }, [ready, dedicatedReady]);
   const geometry = useMemo(
     () =>
       points?.length
@@ -115,6 +156,7 @@ export default function DiscoveryMap({
     onSelect,
     onWaypoint,
     acceptedPoint,
+    onGesture: dedicated?.onGesture,
   });
   latest.current = {
     area,
@@ -123,6 +165,7 @@ export default function DiscoveryMap({
     onSelect,
     onWaypoint,
     acceptedPoint,
+    onGesture: dedicated?.onGesture,
   };
   useEffect(() => {
     const update = () => setOffline(!navigator.onLine);
@@ -159,20 +202,23 @@ export default function DiscoveryMap({
       .then((lib) => {
         if (disposed || !host.current) return;
         library.current = lib;
-        const region = areaRegions[latest.current.area];
+        const region = dedicatedMode
+          ? kathmanduRegion
+          : areaRegions[latest.current.area];
         instance = new lib.Map({
           container: host.current,
           style,
           center: [region.longitude, region.latitude],
-          zoom: 11,
+          zoom: dedicatedMode ? regionCamera(region).zoom : 11,
           attributionControl: false,
           keyboard: true,
         });
         map.current = instance;
-        instance.addControl(
-          new lib.NavigationControl({ showCompass: false }),
-          "top-right",
-        );
+        if (!dedicatedMode)
+          instance.addControl(
+            new lib.NavigationControl({ showCompass: false }),
+            "top-right",
+          );
         instance.addControl(
           new lib.AttributionControl({
             compact: false,
@@ -194,6 +240,7 @@ export default function DiscoveryMap({
         });
         instance.on("movestart", (event) => {
           if (event.originalEvent) {
+            latest.current.onGesture?.();
             lastCamera.current = "";
             setFollowing(false);
           }
@@ -305,7 +352,10 @@ export default function DiscoveryMap({
           id: "routes",
           type: "line",
           source: "routes",
-          paint: { "line-color": "#ED633E", "line-width": 4 },
+          paint: {
+            "line-color": dedicatedMode ? "#087B77" : "#ED633E",
+            "line-width": dedicatedMode ? 5 : 4,
+          },
           layout: { "line-join": "round", "line-cap": "round" },
         });
     } catch {
@@ -318,7 +368,7 @@ export default function DiscoveryMap({
       );
       return () => clearTimeout(timer);
     }
-  }, [routeData, ready]);
+  }, [routeData, ready, dedicatedMode]);
   useEffect(() => {
     const instance = map.current;
     if (!instance || !ready || loading.current.pending) return;
@@ -385,6 +435,31 @@ export default function DiscoveryMap({
             kind: "waypoint",
           }),
         );
+    } else if (dedicatedMode) {
+      const points = geometry[0]?.points.filter(validCoordinate);
+      if (points && points.length > 1) {
+        items.push({
+          id: "start",
+          ...points[0],
+          label: "Route start",
+          text: "S",
+          kind: "waypoint",
+        });
+        items.push({
+          id: "finish",
+          ...points[points.length - 1],
+          label: "Route finish",
+          text: "F",
+          kind: "waypoint",
+        });
+      }
+      if (dedicatedPin)
+        items.push({
+          id: "map-pin",
+          ...dedicatedPin,
+          text: "◆",
+          kind: "place",
+        });
     } else if (!tracking) {
       for (const route of geometry) {
         const point = route.points.find(validCoordinate);
@@ -415,7 +490,7 @@ export default function DiscoveryMap({
           });
       }
     }
-    if (variant === "explore")
+    if (variant === "explore" && !dedicatedMode)
       for (const place of areaPlaces[area])
         items.push({
           id: "place:" + area + place.name,
@@ -452,6 +527,8 @@ export default function DiscoveryMap({
     selectedId,
     acceptedPoint,
     variant,
+    dedicatedMode,
+    dedicatedPin,
   ]);
   function fit(coordinates: number[][]) {
     if (!coordinates.length) return;
@@ -467,7 +544,7 @@ export default function DiscoveryMap({
   }
   const previousFit = useRef("");
   useEffect(() => {
-    if (!ready || tracking) return;
+    if (!ready || tracking || dedicatedMode) return;
     const intent = JSON.stringify([area, selectedId, fitRequest, retry]);
     if (previousFit.current === intent) return;
     previousFit.current = intent;
@@ -499,6 +576,7 @@ export default function DiscoveryMap({
     tracking,
     retry,
     demoCoordinates,
+    dedicatedMode,
   ]);
   const acceptedLongitude = acceptedPoint?.longitude;
   const acceptedLatitude = acceptedPoint?.latitude;
@@ -658,7 +736,7 @@ export default function DiscoveryMap({
   }
   useEffect(() => {
     const controller = new AbortController();
-    if (!key || query.trim().length < 3) return;
+    if (dedicatedMode || !key || query.trim().length < 3) return;
     const timer = setTimeout(() => {
       setSearchStatus("Searching places ");
       void fetch(
@@ -701,7 +779,7 @@ export default function DiscoveryMap({
       clearTimeout(timer);
       controller.abort();
     };
-  }, [key, query]);
+  }, [key, query, dedicatedMode]);
   const buttonStyle = {
     fontFamily: "inherit",
     fontSize: 13,
@@ -722,8 +800,9 @@ export default function DiscoveryMap({
         fontFamily: "Arial, sans-serif",
         color: c.text,
         background: c.panel,
-        border: `1px solid ${c.border}`,
-        borderRadius: 16,
+        border: dedicatedMode ? undefined : `1px solid ${c.border}`,
+        borderRadius: dedicatedMode ? 0 : 16,
+        height: dedicatedMode ? "100%" : undefined,
         overflow: "hidden",
       }}
     >
@@ -732,58 +811,60 @@ export default function DiscoveryMap({
           ".sk-map button:disabled{opacity:.45;cursor:not-allowed}.sk-map button:focus-visible,.sk-map input:focus-visible{outline:3px solid #38a6a3;outline-offset:2px}.sk-map .maplibregl-ctrl-group button{width:44px;height:44px}.sk-map .maplibregl-ctrl-attrib{font-size:11px}"
         }
       </style>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 6,
-          padding: 10,
-        }}
-      >
-        <div style={{ display: "flex", gap: 6, minWidth: 0 }}>
-          {tracking ? (
+      {!dedicatedMode ? (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 6,
+            padding: 10,
+          }}
+        >
+          <div style={{ display: "flex", gap: 6, minWidth: 0 }}>
+            {tracking ? (
+              <button
+                style={buttonStyle}
+                aria-label="Follow location"
+                title="Follow accepted workout GPS only"
+                disabled={!ready || !acceptedPoint}
+                aria-pressed={following ? Boolean(acceptedPoint) : false}
+                onClick={() => {
+                  lastCamera.current = "";
+                  setFollowing((value) => !value);
+                }}
+              >
+                Follow
+              </button>
+            ) : (
+              <button
+                style={buttonStyle}
+                disabled={!ready || locating || offline}
+                onClick={locate}
+              >
+                My location
+              </button>
+            )}
             <button
               style={buttonStyle}
-              aria-label="Follow location"
-              title="Follow accepted workout GPS only"
-              disabled={!ready || !acceptedPoint}
-              aria-pressed={following ? Boolean(acceptedPoint) : false}
-              onClick={() => {
-                lastCamera.current = "";
-                setFollowing((value) => !value);
-              }}
+              aria-label={tracking ? "Recenter location" : "Recenter map"}
+              disabled={!ready || locating}
+              onClick={recenter}
             >
-              Follow
+              {locating ? "Locating..." : "Recenter"}
             </button>
-          ) : (
-            <button
-              style={buttonStyle}
-              disabled={!ready || locating || offline}
-              onClick={locate}
-            >
-              My location
-            </button>
-          )}
+          </div>
           <button
             style={buttonStyle}
-            aria-label={tracking ? "Recenter location" : "Recenter map"}
-            disabled={!ready || locating}
-            onClick={recenter}
+            aria-label="Map options"
+            aria-expanded={optionsOpen}
+            onClick={() => setOptionsOpen((value) => !value)}
           >
-            {locating ? "Locating..." : "Recenter"}
+            Options
           </button>
         </div>
-        <button
-          style={buttonStyle}
-          aria-label="Map options"
-          aria-expanded={optionsOpen}
-          onClick={() => setOptionsOpen((value) => !value)}
-        >
-          Options
-        </button>
-      </div>
-      {optionsOpen ? (
+      ) : null}
+      {!dedicatedMode && optionsOpen ? (
         <div
           style={{
             display: "flex",
@@ -848,7 +929,12 @@ export default function DiscoveryMap({
           {r.name}
         </button>
       ))}
-      <div style={{ position: "relative", height }}>
+      <div
+        style={{
+          position: "relative",
+          height: dedicatedMode ? "100%" : height,
+        }}
+      >
         <div
           ref={host}
           style={{ width: "100%", height: "100%", background: c.greenSoft }}
@@ -874,7 +960,7 @@ export default function DiscoveryMap({
               pointerEvents: "none",
               left: 12,
               right: 50,
-              top: 12,
+              top: dedicatedMode ? "40%" : 12,
               background: c.panel,
               padding: 12,
               borderRadius: 10,
@@ -901,37 +987,41 @@ export default function DiscoveryMap({
           </div>
         ) : null}
       </div>
-      <div
-        aria-live="polite"
-        style={{
-          padding: "10px 12px",
-          fontSize: 12,
-          lineHeight: "18px",
-          color: c.muted,
-        }}
-      >
-        {config?.development ? "Development map style. " : ""}
-        {variant === "explore" && geometry.length === 0
-          ? "No saved route geometry. "
-          : ""}
-        {(tracking && acceptedPoint && locationStatus.startsWith("Approximate")
-          ? "Teal marks the latest accepted GPS location."
-          : locationStatus) ||
-          searchStatus ||
-          (tracking
-            ? "Teal marks accepted GPS. Recenter can use a map-only position."
-            : variant === "activity"
-              ? "Recorded GPS. Pauses and signal gaps stay separate."
-              : variant === "planner"
-                ? demoCoordinates
-                  ? "Orange connects waypoints. Teal shows the synthetic demo."
-                  : "Straight-line waypoints, not road-following directions."
-                : geometry.length
-                  ? "Orange routes; teal selection. Plans use straight lines."
-                  : variant === "explore"
-                    ? "Browse Nepal or open Route Studio."
-                    : "No saved route geometry.")}
-      </div>
+      {!dedicatedMode ? (
+        <div
+          aria-live="polite"
+          style={{
+            padding: "10px 12px",
+            fontSize: 12,
+            lineHeight: "18px",
+            color: c.muted,
+          }}
+        >
+          {config?.development ? "Development map style. " : ""}
+          {variant === "explore" && geometry.length === 0
+            ? "No saved route geometry. "
+            : ""}
+          {(tracking &&
+          acceptedPoint &&
+          locationStatus.startsWith("Approximate")
+            ? "Teal marks the latest accepted GPS location."
+            : locationStatus) ||
+            searchStatus ||
+            (tracking
+              ? "Teal marks accepted GPS. Recenter can use a map-only position."
+              : variant === "activity"
+                ? "Recorded GPS. Pauses and signal gaps stay separate."
+                : variant === "planner"
+                  ? demoCoordinates
+                    ? "Orange connects waypoints. Teal shows the synthetic demo."
+                    : "Straight-line waypoints, not road-following directions."
+                  : geometry.length
+                    ? "Orange routes; teal selection. Plans use straight lines."
+                    : variant === "explore"
+                      ? "Browse Nepal or open Route Studio."
+                      : "No saved route geometry.")}
+        </div>
+      ) : null}
     </section>
   );
 }

@@ -8,6 +8,7 @@ import { athleteFont } from "../../../components/athlete";
 const icons = {
   index: "home-outline",
   explore: "compass-outline",
+  maps: "map-outline",
   events: "calendar-outline",
   record: "add-circle-outline",
   activities: "stats-chart-outline",
@@ -85,7 +86,23 @@ export default function TabLayout() {
       })}
     >
       <Tabs.Screen name="index" options={{ title: "Home" }} />
-      <Tabs.Screen name="explore" options={{ title: "Explore" }} />
+      <Tabs.Screen
+        name="maps"
+        options={{
+          title: "Maps",
+          tabBarAccessibilityLabel: "Maps",
+          headerShown: false,
+        }}
+      />
+      <Tabs.Screen
+        name="explore"
+        options={{
+          title: "Explore",
+          // Keep /explore routable on SDK 58, which redirects href: null tabs.
+          tabBarButton: () => null,
+          tabBarItemStyle: { display: "none" },
+        }}
+      />
       <Tabs.Screen name="record" options={{ title: "Record" }} />
       <Tabs.Screen name="events" options={{ title: "Events" }} />
       <Tabs.Screen name="activities" options={{ title: "Activities" }} />

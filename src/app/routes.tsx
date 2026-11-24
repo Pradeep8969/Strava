@@ -1,5 +1,5 @@
 import { router, useLocalSearchParams } from "expo-router";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Keyboard,
@@ -71,15 +71,25 @@ import {
 } from "../../services/route-cloud";
 export default function Routes() {
   const user = useSession()?.user.id;
-  const { edit } = useLocalSearchParams<{ edit?: string }>();
+  const { edit, from } = useLocalSearchParams<{
+    edit?: string;
+    from?: string;
+  }>();
   return edit ? (
     <EditRouteCopy key={user ?? "local"} edit={edit} />
   ) : (
-    <RouteStudio key={user ?? "local"} />
+    <RouteStudio
+      key={user ?? "local"}
+      mapsDraftOwner={from === "maps" ? (user ?? "local") : undefined}
+    />
   );
 }
 type PlanningMode = "Straight-line" | "Road-following" | "Road-following demo";
 type Placement = WaypointEdit & { label: string; target?: Coordinate };
+type WaypointDraft = { points: TrackPoint[]; history: TrackPoint[][] };
+// Keep the new-route draft for the Maps round trip. A preview result never enters it.
+let mapsDraft:
+  { owner: string; draft: WaypointDraft; title: string } | undefined;
 
 function EditRouteCopy({ edit }: { edit: string }) {
   const user = useSession()?.user.id;
@@ -99,22 +109,30 @@ function EditRouteCopy({ edit }: { edit: string }) {
   );
 }
 
-function RouteStudio({ source }: { source?: LibraryRoute } = {}) {
+function RouteStudio({
+  source,
+  mapsDraftOwner,
+}: { source?: LibraryRoute; mapsDraftOwner?: string } = {}) {
   const session = useSession();
   const { loaded, warning } = useRouteLibrary();
 
   const colors = useColors();
   const wide = useWindowDimensions().width >= 1100;
   const [fitRequest, setFitRequest] = useState(source ? 1 : 0),
-    [draft, setDraft] = useState<{
-      points: TrackPoint[];
-      history: TrackPoint[][];
-    }>({
-      points: source?.points ?? [],
-      history: [],
-    }),
-    [title, setTitle] = useState(source?.title ?? "My route"),
+    [draft, setDraft] = useState<WaypointDraft>(() =>
+      mapsDraft && mapsDraft.owner === mapsDraftOwner
+        ? mapsDraft.draft
+        : { points: source?.points ?? [], history: [] },
+    ),
+    [title, setTitle] = useState(() =>
+      mapsDraft && mapsDraft.owner === mapsDraftOwner
+        ? mapsDraft.title
+        : (source?.title ?? "My route"),
+    ),
     a = useAction();
+  useLayoutEffect(() => {
+    if (mapsDraftOwner) mapsDraft = { owner: mapsDraftOwner, draft, title };
+  }, [mapsDraftOwner, draft, title]);
   const { setMessage } = a;
   const [mode, setMode] = useState<PlanningMode>("Straight-line");
   const [profile, setProfile] = useState<DemoProfile>("walking");

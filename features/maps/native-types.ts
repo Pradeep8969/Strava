@@ -38,6 +38,7 @@ export type NativeMapProps = {
   onMapReady?: () => void;
   onMapError?: () => void;
   showOfflineGeometry?: boolean;
+  dedicated?: boolean;
   onTouchStart?: () => void;
   onPress?: (event: MapPressEvent) => void;
 };

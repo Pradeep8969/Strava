@@ -28,7 +28,8 @@ function hookSlot(initial: unknown) {
 }
 vi.mock("react", async (original) => ({
   ...(await original<typeof import("react")>()),
-  useState: (initial: unknown) => {
+  useState: (value: unknown) => {
+    const initial = typeof value === "function" ? value() : value;
     if (!mock.interactive)
       return [
         initial === "Straight-line"
@@ -52,6 +53,7 @@ vi.mock("react", async (original) => ({
     ];
   },
   useMemo: (read: () => unknown) => read(),
+  useLayoutEffect: () => undefined,
   useCallback: (read: unknown) => read,
   useRef: (current: unknown) => {
     if (!mock.interactive) return { current };

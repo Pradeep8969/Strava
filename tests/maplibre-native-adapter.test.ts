@@ -117,6 +117,32 @@ afterEach(() => {
 });
 
 describe("Android MapLibre adapter", () => {
+  it("enables native Maps gestures and forwards only user-driven moves", () => {
+    const gesture = vi.fn();
+    const tree = nodes(
+      NativeMap({
+        initialRegion: region,
+        dedicated: true,
+        onTouchStart: gesture,
+      }),
+    );
+    const map = tree.find((node) => node.type === "LibreMap")!;
+    expect(map.props).toMatchObject({
+      dragPan: true,
+      touchZoom: true,
+      touchRotate: true,
+      doubleTapZoom: true,
+      attribution: true,
+      compass: false,
+    });
+    expect(
+      nodes(map).find((node) => node.type === "Camera")?.props,
+    ).not.toHaveProperty("viewState");
+    map.props.onRegionWillChange({ nativeEvent: { userInteraction: false } });
+    expect(gesture).not.toHaveBeenCalled();
+    map.props.onRegionWillChange({ nativeEvent: { userInteraction: true } });
+    expect(gesture).toHaveBeenCalledOnce();
+  });
   it("mounts saved route geometry with a local style before any remote style is available", () => {
     state.style = null;
     vi.stubEnv("EXPO_PUBLIC_MAPTILER_ANDROID_KEY", "");

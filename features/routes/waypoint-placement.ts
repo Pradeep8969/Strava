@@ -35,7 +35,7 @@ export function parseWaypointCoordinates(
 }
 
 // Approximate map starting points. A user confirms the actual waypoint separately.
-const landmarks = [
+export const waypointLandmarks = [
   { label: "Thamel", latitude: 27.71516, longitude: 85.31022 },
   { label: "Ratna Park", latitude: 27.70505, longitude: 85.31471 },
   { label: "Swayambhu", latitude: 27.7149, longitude: 85.2904 },
@@ -49,5 +49,7 @@ export function findWaypointLocations(query: string) {
   const point = parseWaypointCoordinates(text);
   if (point)
     return [{ ...point, label: `${point.latitude}, ${point.longitude}` }];
-  return landmarks.filter(({ label }) => label.toLowerCase().includes(text));
+  return waypointLandmarks.filter(({ label }) =>
+    label.toLowerCase().includes(text),
+  );
 }

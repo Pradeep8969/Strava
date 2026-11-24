@@ -23,6 +23,7 @@ export interface BrowserMap {
   getLayer(id: string): unknown;
   setPaintProperty(id: string, name: string, value: unknown): void;
   stop?(): void;
+  resetNorth?(): void;
   addControl(control: unknown, position?: string): void;
   getCanvas(): HTMLCanvasElement;
   getSource(id: string): { setData(data: unknown): void } | undefined;

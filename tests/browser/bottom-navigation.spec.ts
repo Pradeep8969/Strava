@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 const screens = [
   ["Home", "/", "Namaste, athlete."],
-  ["Explore", "/explore", "Discover routes"],
+  ["Maps", "/maps", null],
   ["Record", "/record", "Record activity"],
   ["Events", "/events", "Nepal events"],
   ["Activities", "/activities", "Activity journal"],
@@ -31,7 +31,9 @@ for (const width of [390, 768, 1440]) {
         await expect(page).toHaveURL(
           new RegExp(`${path === "/" ? "/" : path}$`),
         );
-        const heading = page.getByRole("heading", { name: title, exact: true });
+        const heading = title
+          ? page.getByRole("heading", { name: title, exact: true })
+          : page.getByRole("button", { name: "Search maps", exact: true });
         await expect(heading).toBeVisible();
         await expect(tab).toHaveAttribute("aria-selected", "true");
         await expect(tab.getByText(name, { exact: true })).toHaveCSS(
@@ -61,19 +63,21 @@ for (const width of [390, 768, 1440]) {
           previousRight = box.x + box.width;
         }
         // Scroll the actual screen container, not the document or the tab bar.
-        const viewport = await heading.evaluate((element) => {
-          let parent = element.parentElement;
-          while (
-            parent &&
-            !["auto", "scroll"].includes(getComputedStyle(parent).overflowY)
-          )
-            parent = parent.parentElement;
-          if (!parent) throw new Error("Screen ScrollView not found");
-          parent.scrollTop = parent.scrollHeight;
-          const rect = parent.getBoundingClientRect();
-          return { bottom: rect.bottom, scrollTop: parent.scrollTop };
-        });
-        expect(viewport.bottom).toBeLessThanOrEqual(bounds.y + 1);
+        const viewport = title
+          ? await heading.evaluate((element) => {
+              let parent = element.parentElement;
+              while (
+                parent &&
+                !["auto", "scroll"].includes(getComputedStyle(parent).overflowY)
+              )
+                parent = parent.parentElement;
+              if (!parent) throw new Error("Screen ScrollView not found");
+              parent.scrollTop = parent.scrollHeight;
+              const rect = parent.getBoundingClientRect();
+              return { bottom: rect.bottom, scrollTop: parent.scrollTop };
+            })
+          : null;
+        if (viewport) expect(viewport.bottom).toBeLessThanOrEqual(bounds.y + 1);
         await expect(tab).toBeVisible();
         expect((await bar.boundingBox())!.y).toBeCloseTo(bounds.y, 0);
         expect(
@@ -83,7 +87,7 @@ for (const width of [390, 768, 1440]) {
         ).toBe(false);
       }
       await page.screenshot({
-        path: `artifacts/bottom-navigation/profile-${width}-${theme}.png`,
+        path: `artifacts/dedicated-maps-review/profile-${width}-${theme}.png`,
       });
       if (width === 1440) {
         // Inactive navigator headers remain mounted with aria-hidden.

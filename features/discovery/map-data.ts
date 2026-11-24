@@ -2,6 +2,7 @@ import type { TrackPoint } from "../../types/activity";
 import { distance, trackSegments } from "../../utils/tracking";
 import type { Area, SavedRoute } from "./catalog";
 import type { RouteCoordinate } from "../routes/routing";
+import type { MapsCanvasProps } from "../maps/dedicated-canvas";
 
 export type MapRoute = SavedRoute & { kind: "plan" | "recording" };
 export type DiscoveryMapProps = {
@@ -18,6 +19,7 @@ export type DiscoveryMapProps = {
   variant?: "explore" | "record" | "planner" | "activity";
   tone?: "default" | "dark";
   demoCoordinates?: readonly RouteCoordinate[];
+  dedicated?: Omit<MapsCanvasProps, "route">;
 };
 export const validCoordinate = (p: { latitude: number; longitude: number }) =>
   Number.isFinite(p.latitude) &&
